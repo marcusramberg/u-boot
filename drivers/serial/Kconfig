@@ -1194,3 +1194,18 @@ config SYS_SDMR
 	default 0x0
 
 endif
+
+config SERIAL_MEMLOG
+	bool "Console into a fixed RAM address"
+	depends on DM_SERIAL
+	help
+	  Append console output to a ring buffer at a fixed physical address
+	  instead of a UART. Meant for boards with no accessible serial port:
+	  the next OS to boot can read the buffer and recover the log of a
+	  U-Boot that hung before video came up.
+
+config DEBUG_UART_MEMLOG
+	bool "Route the debug UART into the RAM console too"
+	depends on SERIAL_MEMLOG && DEBUG_UART
+	help
+	  Send very early output (before driver model is up) to the same buffer.
