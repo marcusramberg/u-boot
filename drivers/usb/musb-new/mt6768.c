@@ -302,6 +302,15 @@ static int mtk_musb_probe(struct udevice *dev)
 	if (!host->host)
 		return -EIO;
 
+	/*
+	 * Do NOT call usb_add_gadget_udc() here. In theory it registers the
+	 * controller in the UDC list (other musb drivers do exactly that), but
+	 * on this device U-Boot dies inside probe. The result is losing the
+	 * screen entirely if probe runs before the console is up.
+	 *
+	 * So `fastboot usb 0` still reports "No UDC available in the system".
+	 * Another way is needed; check whether musb_gadget_setup() is called.
+	 */
 	return 0;
 }
 

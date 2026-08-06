@@ -19,6 +19,33 @@
         format = "a8r8g8b8";
         status = "okay";
     };
+#elif defined(CONFIG_XIAOMI_LANCELOT)
+    model = "Xiaomi Redmi 9";
+    compatible = "xiaomi,lancelot";
+
+    /*
+     * Console into RAM. There is no reachable UART on this phone, so without
+     * this a U-Boot that hangs before video is up leaves nothing to debug.
+     * Sits past the end of what /dev/fb0 maps, inside the framebuffer
+     * reservation, where neither lk nor Linux writes.
+     */
+    memlog: serial-memlog {
+        compatible = "u-boot,serial-memlog";
+        /* bind before relocation, else the console dies right after DRAM */
+        bootph-all;
+        status = "okay";
+    };
+
+    fb0: framebuffer {
+        compatible = "simple-framebuffer";
+        reg = <0 0x7dcb0000 0 (1088 * 2340 * 4)>;
+        rot = <0>;
+        width = <1080>;
+        height = <2340>;
+        stride = <(1088 * 4)>;
+        format = "a8r8g8b8";
+        status = "okay";
+    };
 #else
     model = "MediaTek MT6768-based device";
     compatible = "generic,mt6768";
@@ -26,11 +53,24 @@
 
     chosen {
         tick-timer = &gpt;
+#if defined(CONFIG_XIAOMI_LANCELOT)
+        stdout-path = &memlog;
+#endif
     };
 
-    memory@40000000 {
-        /* see dram_init() (2 GiB) */
-        reg = <0 0x40000000 0 0x80000000>;
+    /*
+     * The name must be `memory` with no unit address: skeleton64.dtsi already
+     * declares `/memory` with reg = <0 0 0 0>, and U-Boot looks up the exact
+     * path "/memory". Naming it `memory@40000000` would create a second node
+     * and U-Boot would still read the empty one.
+     */
+    memory {
+        /*
+         * Declare only the first contiguous region: 0x40000000 to 0x7dcb0000,
+         * where the framebuffer reservation begins. U-Boot relocates to the
+         * top of this region, so it has to be certain that it is real RAM.
+         */
+        reg = <0 0x40000000 0 0x3dcb0000>;
         device_type = "memory";
     };
 };

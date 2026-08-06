@@ -6,6 +6,10 @@ choice
 config XIAOMI_MERLIN
 	bool "Xiaomi Redmi Note 9"
 	depends on TARGET_MT6768
+
+config XIAOMI_LANCELOT
+	bool "Xiaomi Redmi 9"
+	depends on TARGET_MT6768
 endchoice
 
 config SYS_SOC
@@ -23,6 +27,7 @@ config TARGET_MT6768
 	select CPU
 	select REGMAP
 	select SYSCON
+	select LINUX_KERNEL_IMAGE_HEADER
 	help
 	  The MediaTek MT6768 (Helio P65) is a mid-range ARMv8.2-A (64-bit) SoC
 	  released in 2019. It has 2x Cortex-A75 @ 2.0 GHz & 6x Cortex-A55 @ 1.7 GHz.

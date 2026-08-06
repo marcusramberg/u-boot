@@ -1,0 +1,5 @@
+MT6768
+M:	mt6768-mainline
+S:	Maintained
+F:	board/mediatek/mt6768
+F:	configs/mt6768_defconfig
