@@ -153,6 +153,7 @@ static int hsi2c_wait_for_trx(struct exynos5_hsi2c *i2c,
 				return I2C_NOK_TOUT;
 			}
 			return I2C_OK;
+		case VARIANT_HSI2C_EXYNOSAUTOV9:
 		case VARIANT_HSI2C_EXYNOS7:
 			if (int_status & HSI2C_INT_TRANS_DONE)
 				return I2C_OK;
@@ -213,6 +214,16 @@ static int hsi2c_get_clk_details(struct udevice *dev)
 	t_ftl_cycle = (readl(&hsregs->usi_conf) >> 16) & 0x7;
 	utemp0 = (clkin / op_clk) - 8 - 2 * t_ftl_cycle;
 
+	/*
+	 * autov9 takes a plain divider rather than the per-phase FS1/FS2
+	 * timings, so there is nothing to search for here.
+	 */
+	if (i2c_bus->variant == VARIANT_HSI2C_EXYNOSAUTOV9) {
+		i2c_bus->clk_div = (clkin / (16 * op_clk)) - 1;
+		i2c_bus->clk_cycle = 0;
+		return 0;
+	}
+
 	/* CLK_DIV max is 256 */
 	for (i = 0; i < 256; i++) {
 		utemp1 = utemp0 / (i + 1);
@@ -238,6 +249,24 @@ static void hsi2c_ch_init(struct s3c24x0_i2c_bus *i2c_bus)
 	u32 i2c_timing_s2;
 	u32 i2c_timing_s3;
 	u32 i2c_timing_sla;
+
+	/*
+	 * autov9 drives SCL from a single TIMING_FS3 divider; the exynos7
+	 * per-phase timings below leave the clock wrong and every transfer
+	 * NACKs. Mirrors I2C_TYPE_EXYNOSAUTOV9 in Linux's i2c-exynos5.
+	 */
+	if (i2c_bus->variant == VARIANT_HSI2C_EXYNOSAUTOV9) {
+		writel(HSI2C_TRAILING_COUNT, &hsregs->usi_trailing_ctl);
+		clrsetbits_le32(&hsregs->usi_timeout, HSI2C_TIMEOUT_EN, 0);
+		writel(readl(&hsregs->usi_conf) | HSI2C_AUTO_MODE,
+		       &hsregs->usi_conf);
+		writel(HSI2C_INT_I2C_TRANS_EN, &hsregs->usi_int_en);
+		writel(HSI2C_RXFIFO_EN | HSI2C_TXFIFO_EN,
+		       &hsregs->usi_fifo_ctl);
+		writel(i2c_bus->clk_div << 16, &hsregs->usi_timing_fs3);
+		printf("hsi2c: autov9 timing, fs3 div=%u\n", i2c_bus->clk_div);
+		return;
+	}
 
 	n_clkdiv = i2c_bus->clk_div;
 	t_scl_l = i2c_bus->clk_cycle / 2;
@@ -406,6 +435,7 @@ static int hsi2c_prepare_transaction(struct exynos5_hsi2c *i2c,
 	case VARIANT_HSI2C_EXYNOS5:
 		writel(HSI2C_INT_I2C_EN, &i2c->usi_int_stat);
 		break;
+	case VARIANT_HSI2C_EXYNOSAUTOV9:
 	case VARIANT_HSI2C_EXYNOS7:
 		writel(HSI2C_INT_I2C_TRANS_EN, &i2c->usi_int_stat);
 		break;
@@ -635,6 +665,10 @@ static const struct dm_i2c_ops exynos_hs_i2c_ops = {
 static const struct udevice_id exynos_hs_i2c_ids[] = {
 	{ .compatible = "samsung,exynos5-hsi2c", .data = VARIANT_HSI2C_EXYNOS5 },
 	{ .compatible = "samsung,exynos7-hsi2c", .data = VARIANT_HSI2C_EXYNOS7 },
+	{ .compatible = "samsung,exynosautov9-hsi2c",
+	  .data = VARIANT_HSI2C_EXYNOSAUTOV9 },
+	{ .compatible = "google,zuma-hsi2c",
+	  .data = VARIANT_HSI2C_EXYNOSAUTOV9 },
 	{ }
 };
 
