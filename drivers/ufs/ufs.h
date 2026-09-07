@@ -522,12 +522,17 @@ struct ufs_hba_ops {
 	int (*init)(struct ufs_hba *hba);
 	int (*get_max_pwr_mode)(struct ufs_hba *hba,
 				struct ufs_pwr_mode_info *max_pwr_info);
+	int (*pwr_change_notify)(struct ufs_hba *hba,
+				 enum ufs_notify_change_status status,
+				 struct ufs_pa_layer_attr *pwr_mode);
 	int (*hce_enable_notify)(struct ufs_hba *hba,
 				 enum ufs_notify_change_status);
 	int (*link_startup_notify)(struct ufs_hba *hba,
 				   enum ufs_notify_change_status);
 	int (*phy_initialization)(struct ufs_hba *hba);
 	int (*device_reset)(struct ufs_hba *hba);
+	void (*setup_xfer_req)(struct ufs_hba *hba, int tag,
+			       bool is_scsi_cmd);
 };
 
 enum ufshcd_quirks {
@@ -712,6 +717,7 @@ struct ufs_hba {
 	struct utp_upiu_req *ucd_req_ptr;
 	struct utp_upiu_rsp *ucd_rsp_ptr;
 	struct ufshcd_sg_entry *ucd_prdt_ptr;
+	size_t sg_entry_size;
 
 	/* Power Mode information */
 	enum ufs_dev_pwr_mode curr_dev_pwr_mode;
@@ -720,6 +726,16 @@ struct ufs_hba {
 
 	struct ufs_dev_cmd dev_cmd;
 };
+
+static inline void ufshcd_set_sg_entry_size(struct ufs_hba *hba, size_t size)
+{
+	hba->sg_entry_size = size;
+}
+
+static inline size_t ufshcd_sg_entry_size(const struct ufs_hba *hba)
+{
+	return hba->sg_entry_size ?: sizeof(struct ufshcd_sg_entry);
+}
 
 static inline int ufshcd_ops_init(struct ufs_hba *hba)
 {
@@ -734,6 +750,16 @@ static inline int ufshcd_ops_get_max_pwr_mode(struct ufs_hba *hba,
 {
 	if (hba->ops && hba->ops->get_max_pwr_mode)
 		return hba->ops->get_max_pwr_mode(hba, max_pwr_info);
+
+	return 0;
+}
+
+static inline int ufshcd_ops_pwr_change_notify(struct ufs_hba *hba,
+					       enum ufs_notify_change_status status,
+					       struct ufs_pa_layer_attr *pwr_mode)
+{
+	if (hba->ops && hba->ops->pwr_change_notify)
+		return hba->ops->pwr_change_notify(hba, status, pwr_mode);
 
 	return 0;
 }
@@ -770,6 +796,13 @@ static inline int ufshcd_vops_device_reset(struct ufs_hba *hba)
 		return hba->ops->device_reset(hba);
 
 	return 0;
+}
+
+static inline void ufshcd_vops_setup_xfer_req(struct ufs_hba *hba, int tag,
+					      bool is_scsi_cmd)
+{
+	if (hba->ops && hba->ops->setup_xfer_req)
+		hba->ops->setup_xfer_req(hba, tag, is_scsi_cmd);
 }
 
 /* Interrupt disable masks */

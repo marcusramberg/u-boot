@@ -13,6 +13,8 @@
 #include <clk.h>
 #include <dm.h>
 #include <log.h>
+#include <lmb.h>
+#include <mapmem.h>
 #include <dm/device_compat.h>
 #include <dm/devres.h>
 #include <dm/lists.h>
@@ -27,6 +29,7 @@
 #include <linux/bitops.h>
 #include <linux/delay.h>
 #include <linux/dma-mapping.h>
+#include <linux/sizes.h>
 
 #include "ufs.h"
 
@@ -65,6 +68,120 @@
 static inline bool ufshcd_is_hba_active(struct ufs_hba *hba);
 static inline void ufshcd_hba_stop(struct ufs_hba *hba);
 static int ufshcd_hba_enable(struct ufs_hba *hba);
+
+static dma_addr_t ufshcd_dma_addr(struct ufs_hba *hba, const void *ptr)
+{
+	return dev_phys_to_bus(hba->dev, map_to_sysmem(ptr));
+}
+
+static size_t ufshcd_ucd_size(struct ufs_hba *hba)
+{
+	return offsetof(struct utp_transfer_cmd_desc, prd_table) +
+	       MAX_BUFF * ufshcd_sg_entry_size(hba);
+}
+
+static struct ufshcd_sg_entry *ufshcd_prdt_entry(struct ufs_hba *hba,
+						 unsigned int idx)
+{
+	return (struct ufshcd_sg_entry *)((u8 *)hba->ucd_prdt_ptr +
+					 idx * ufshcd_sg_entry_size(hba));
+}
+
+static size_t ufshcd_prdt_segment_size(struct ufs_hba *hba)
+{
+	if (ufshcd_sg_entry_size(hba) > sizeof(struct ufshcd_sg_entry))
+		return SZ_4K;
+
+	return MAX_PRDT_ENTRY;
+}
+
+static size_t ufshcd_dma_data_align(struct ufs_hba *hba)
+{
+	if (ufshcd_sg_entry_size(hba) > sizeof(struct ufshcd_sg_entry))
+		return SZ_4K;
+
+	return ARCH_DMA_MINALIGN;
+}
+
+struct ufshcd_low_bounce {
+	void *orig;
+	void *buf;
+	phys_addr_t phys;
+	size_t size;
+	bool active;
+};
+
+static int ufshcd_need_low_bounce(struct ufs_hba *hba, const void *buf,
+				  size_t len)
+{
+	dma_addr_t da;
+	size_t align;
+
+	if (!buf || !len)
+		return 0;
+
+	da = ufshcd_dma_addr(hba, buf);
+	align = ufshcd_dma_data_align(hba);
+
+	if (align > ARCH_DMA_MINALIGN && !IS_ALIGNED(da, align))
+		return 1;
+
+	if (!(hba->quirks & UFSHCD_QUIRK_BROKEN_64BIT_ADDRESS))
+		return 0;
+
+	return upper_32_bits(da) || upper_32_bits(da + len - 1);
+}
+
+static int ufshcd_low_bounce_start(struct ufs_hba *hba, struct scsi_cmd *pccb,
+				   struct ufshcd_low_bounce *bounce)
+{
+	phys_addr_t addr = SZ_4G;
+	size_t size;
+	size_t align;
+	int ret;
+
+	memset(bounce, 0, sizeof(*bounce));
+	if (!ufshcd_need_low_bounce(hba, pccb->pdata, pccb->datalen))
+		return 0;
+
+	align = ufshcd_dma_data_align(hba);
+	size = ALIGN(pccb->datalen, align);
+	ret = lmb_alloc_mem(LMB_MEM_ALLOC_MAX, align, &addr, size, LMB_NONE);
+	if (ret) {
+		dev_err(hba->dev,
+			"failed to allocate low data bounce buffer (%d)\n", ret);
+		return ret;
+	}
+
+	bounce->orig = pccb->pdata;
+	bounce->buf = map_sysmem(addr, size);
+	bounce->phys = addr;
+	bounce->size = size;
+	bounce->active = true;
+
+	if (pccb->dma_dir == DMA_TO_DEVICE)
+		memcpy(bounce->buf, bounce->orig, pccb->datalen);
+
+	pccb->pdata = bounce->buf;
+	dev_notice(hba->dev, "low data bounce at 0x%llx len=0x%zx\n",
+		   (unsigned long long)addr, size);
+
+	return 0;
+}
+
+static void ufshcd_low_bounce_stop(struct scsi_cmd *pccb,
+				   struct ufshcd_low_bounce *bounce,
+				   bool copy_back)
+{
+	if (!bounce->active)
+		return;
+
+	if (copy_back && pccb->dma_dir == DMA_FROM_DEVICE)
+		memcpy(bounce->orig, bounce->buf, pccb->datalen);
+
+	pccb->pdata = bounce->orig;
+	lmb_free(bounce->phys, bounce->size, LMB_NONE);
+}
 
 /*
  * ufshcd_wait_for_register - wait for register value to change
@@ -467,13 +584,13 @@ static int ufshcd_make_hba_operational(struct ufs_hba *hba)
 	ufshcd_disable_intr_aggr(hba);
 
 	/* Configure UTRL and UTMRL base address registers */
-	ufshcd_writel(hba, lower_32_bits(dev_phys_to_bus(hba->dev, (phys_addr_t)(uintptr_t)(hba->utrdl))),
+	ufshcd_writel(hba, lower_32_bits(ufshcd_dma_addr(hba, hba->utrdl)),
 		      REG_UTP_TRANSFER_REQ_LIST_BASE_L);
-	ufshcd_writel(hba, upper_32_bits(dev_phys_to_bus(hba->dev, (phys_addr_t)(uintptr_t)(hba->utrdl))),
+	ufshcd_writel(hba, upper_32_bits(ufshcd_dma_addr(hba, hba->utrdl)),
 		      REG_UTP_TRANSFER_REQ_LIST_BASE_H);
-	ufshcd_writel(hba, lower_32_bits(dev_phys_to_bus(hba->dev, (phys_addr_t)(uintptr_t)(hba->utmrdl))),
+	ufshcd_writel(hba, lower_32_bits(ufshcd_dma_addr(hba, hba->utmrdl)),
 		      REG_UTP_TASK_REQ_LIST_BASE_L);
-	ufshcd_writel(hba, upper_32_bits(dev_phys_to_bus(hba->dev, (phys_addr_t)(uintptr_t)(hba->utmrdl))),
+	ufshcd_writel(hba, upper_32_bits(ufshcd_dma_addr(hba, hba->utmrdl)),
 		      REG_UTP_TASK_REQ_LIST_BASE_H);
 
 	/*
@@ -661,7 +778,7 @@ static void ufshcd_host_memory_configure(struct ufs_hba *hba)
 	u16 prdt_offset;
 
 	utrdlp = hba->utrdl;
-	cmd_desc_dma_addr = dev_phys_to_bus(hba->dev, (phys_addr_t)(uintptr_t)(hba->ucdl));
+	cmd_desc_dma_addr = ufshcd_dma_addr(hba, hba->ucdl);
 
 	utrdlp->command_desc_base_addr_lo =
 				cpu_to_le32(lower_32_bits(cmd_desc_dma_addr));
@@ -671,9 +788,15 @@ static void ufshcd_host_memory_configure(struct ufs_hba *hba)
 	response_offset = offsetof(struct utp_transfer_cmd_desc, response_upiu);
 	prdt_offset = offsetof(struct utp_transfer_cmd_desc, prd_table);
 
-	utrdlp->response_upiu_offset = cpu_to_le16(response_offset >> 2);
-	utrdlp->prd_table_offset = cpu_to_le16(prdt_offset >> 2);
-	utrdlp->response_upiu_length = cpu_to_le16(ALIGNED_UPIU_SIZE >> 2);
+	if (hba->quirks & UFSHCD_QUIRK_PRDT_BYTE_GRAN) {
+		utrdlp->response_upiu_offset = cpu_to_le16(response_offset);
+		utrdlp->prd_table_offset = cpu_to_le16(prdt_offset);
+		utrdlp->response_upiu_length = cpu_to_le16(ALIGNED_UPIU_SIZE);
+	} else {
+		utrdlp->response_upiu_offset = cpu_to_le16(response_offset >> 2);
+		utrdlp->prd_table_offset = cpu_to_le16(prdt_offset >> 2);
+		utrdlp->response_upiu_length = cpu_to_le16(ALIGNED_UPIU_SIZE >> 2);
+	}
 
 	hba->ucd_req_ptr = (struct utp_upiu_req *)hba->ucdl;
 	hba->ucd_rsp_ptr =
@@ -685,14 +808,51 @@ static void ufshcd_host_memory_configure(struct ufs_hba *hba)
 /**
  * ufshcd_memory_alloc - allocate memory for host memory space data structures
  */
+static void *ufshcd_alloc_desc_mem(struct ufs_hba *hba, const char *name,
+				   size_t size)
+{
+	void *ptr;
+
+	size = ALIGN(size, ARCH_DMA_MINALIGN);
+
+	if (hba->quirks & UFSHCD_QUIRK_BROKEN_64BIT_ADDRESS) {
+		phys_addr_t addr = SZ_4G;
+		int ret;
+
+		ret = lmb_alloc_mem(LMB_MEM_ALLOC_MAX, 1024, &addr, size,
+				    LMB_NONE);
+		if (!ret) {
+			ptr = map_sysmem(addr, size);
+			memset(ptr, 0, size);
+			dev_notice(hba->dev, "%s descriptor at 0x%llx\n",
+				   name, (unsigned long long)addr);
+			return ptr;
+		}
+
+		dev_warn(hba->dev,
+			 "failed to allocate low %s descriptor (%d), using malloc\n",
+			 name, ret);
+	}
+
+	ptr = memalign(1024, size);
+	if (ptr) {
+		dma_addr_t bus = ufshcd_dma_addr(hba, ptr);
+
+		memset(ptr, 0, size);
+		dev_notice(hba->dev, "%s descriptor at 0x%llx\n", name,
+			   (unsigned long long)bus);
+	}
+
+	return ptr;
+}
+
 static int ufshcd_memory_alloc(struct ufs_hba *hba)
 {
 	/* Allocate one Transfer Request Descriptor
 	 * Should be aligned to 1k boundary.
 	 */
-	hba->utrdl = memalign(1024,
-			      ALIGN(sizeof(struct utp_transfer_req_desc),
-				    ARCH_DMA_MINALIGN));
+	hba->utrdl = ufshcd_alloc_desc_mem(hba, "UTRD",
+					   sizeof(struct utp_transfer_req_desc));
 	if (!hba->utrdl) {
 		dev_err(hba->dev, "Transfer Descriptor memory allocation failed\n");
 		return -ENOMEM;
@@ -701,9 +861,7 @@ static int ufshcd_memory_alloc(struct ufs_hba *hba)
 	/* Allocate one Command Descriptor
 	 * Should be aligned to 1k boundary.
 	 */
-	hba->ucdl = memalign(1024,
-			     ALIGN(sizeof(struct utp_transfer_cmd_desc),
-				   ARCH_DMA_MINALIGN));
+	hba->ucdl = ufshcd_alloc_desc_mem(hba, "UCD", ufshcd_ucd_size(hba));
 	if (!hba->ucdl) {
 		dev_err(hba->dev, "Command descriptor memory allocation failed\n");
 		return -ENOMEM;
@@ -909,11 +1067,54 @@ static int ufshcd_comp_devman_upiu(struct ufs_hba *hba,
 	return ret;
 }
 
-static int ufshcd_send_command(struct ufs_hba *hba, unsigned int task_tag)
+static void ufshcd_dump_utp_timeout(struct ufs_hba *hba, unsigned int task_tag)
+{
+	struct utp_transfer_req_desc *req_desc = hba->utrdl;
+	struct utp_upiu_rsp *rsp = hba->ucd_rsp_ptr;
+	struct ufshcd_sg_entry *prd = hba->ucd_prdt_ptr;
+
+	ufshcd_cache_invalidate(req_desc, sizeof(*req_desc));
+	ufshcd_cache_invalidate(rsp, sizeof(*rsp));
+	ufshcd_cache_invalidate(prd, ufshcd_sg_entry_size(hba));
+
+	dev_err(hba->dev,
+		"UTP timeout: hcs=%08x is=%08x ie=%08x db=%08x rs=%08x clr=%08x tag=%u\n",
+		ufshcd_readl(hba, REG_CONTROLLER_STATUS),
+		ufshcd_readl(hba, REG_INTERRUPT_STATUS),
+		ufshcd_readl(hba, REG_INTERRUPT_ENABLE),
+		ufshcd_readl(hba, REG_UTP_TRANSFER_REQ_DOOR_BELL),
+		ufshcd_readl(hba, REG_UTP_TRANSFER_REQ_LIST_RUN_STOP),
+		ufshcd_readl(hba, REG_UTP_TRANSFER_REQ_LIST_CLEAR),
+		task_tag);
+	dev_err(hba->dev,
+		"UTP desc: utrd=0x%llx ucd=0x%llx base=%08x:%08x hdr=%08x ocs=%08x prdt=%u rsp=%08x/%08x uic=%08x/%08x/%08x/%08x/%08x\n",
+		(unsigned long long)ufshcd_dma_addr(hba, hba->utrdl),
+		(unsigned long long)ufshcd_dma_addr(hba, hba->ucdl),
+		le32_to_cpu(req_desc->command_desc_base_addr_hi),
+		le32_to_cpu(req_desc->command_desc_base_addr_lo),
+		le32_to_cpu(req_desc->header.dword_0),
+		le32_to_cpu(req_desc->header.dword_2),
+		le16_to_cpu(req_desc->prd_table_length),
+		be32_to_cpu(rsp->header.dword_0),
+		be32_to_cpu(rsp->header.dword_1),
+		ufshcd_readl(hba, REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER),
+		ufshcd_readl(hba, REG_UIC_ERROR_CODE_DATA_LINK_LAYER),
+		ufshcd_readl(hba, REG_UIC_ERROR_CODE_NETWORK_LAYER),
+		ufshcd_readl(hba, REG_UIC_ERROR_CODE_TRANSPORT_LAYER),
+		ufshcd_readl(hba, REG_UIC_ERROR_CODE_DME));
+	dev_err(hba->dev, "UTP prdt0: base=%08x:%08x size=%08x\n",
+		le32_to_cpu(prd->upper_addr), le32_to_cpu(prd->base_addr),
+		le32_to_cpu(prd->size));
+}
+
+static int ufshcd_send_command(struct ufs_hba *hba, unsigned int task_tag,
+			       bool is_scsi_cmd)
 {
 	unsigned long start;
 	u32 intr_status;
 	u32 enabled_intr_status;
+
+	ufshcd_vops_setup_xfer_req(hba, task_tag, is_scsi_cmd);
 
 	ufshcd_writel(hba, 1 << task_tag, REG_UTP_TRANSFER_REQ_DOOR_BELL);
 
@@ -926,13 +1127,11 @@ static int ufshcd_send_command(struct ufs_hba *hba, unsigned int task_tag)
 		enabled_intr_status = intr_status & hba->intr_mask;
 		ufshcd_writel(hba, intr_status, REG_INTERRUPT_STATUS);
 
-		if (hba->max_pwr_info.info.pwr_rx != SLOWAUTO_MODE &&
-		    hba->max_pwr_info.info.pwr_tx != SLOWAUTO_MODE) {
-			if (get_timer(start) > QUERY_REQ_TIMEOUT) {
-				dev_err(hba->dev,
-					"Timedout waiting for UTP response\n");
-				return -ETIMEDOUT;
-			}
+		if (get_timer(start) > QUERY_REQ_TIMEOUT) {
+			dev_err(hba->dev,
+				"Timedout waiting for UTP response\n");
+			ufshcd_dump_utp_timeout(hba, task_tag);
+			return -ETIMEDOUT;
 		}
 
 		if (enabled_intr_status & UFSHCD_ERROR_MASK) {
@@ -1033,7 +1232,7 @@ static int ufshcd_exec_dev_cmd(struct ufs_hba *hba, enum dev_cmd_type cmd_type,
 	if (err)
 		return err;
 
-	err = ufshcd_send_command(hba, TASK_TAG);
+	err = ufshcd_send_command(hba, TASK_TAG, false);
 	if (err)
 		return err;
 
@@ -1615,63 +1814,86 @@ void ufshcd_prepare_utp_scsi_cmd_upiu(struct ufs_hba *hba,
 
 static inline void prepare_prdt_desc(struct ufs_hba *hba,
 				     struct ufshcd_sg_entry *entry,
-				     unsigned char *buf, ulong len)
+				     unsigned char *buf, ulong dbc)
 {
-	dma_addr_t da = dev_phys_to_bus(hba->dev, (phys_addr_t)(uintptr_t)buf);
+	dma_addr_t da = ufshcd_dma_addr(hba, buf);
 
-	entry->size = cpu_to_le32(len) | GENMASK(1, 0);
+	memset(entry, 0, ufshcd_sg_entry_size(hba));
+	entry->size = cpu_to_le32(dbc) | GENMASK(1, 0);
 	entry->base_addr = cpu_to_le32(lower_32_bits(da));
 	entry->upper_addr = cpu_to_le32(upper_32_bits(da));
 }
 
-static void prepare_prdt_table(struct ufs_hba *hba, struct scsi_cmd *pccb)
+static int prepare_prdt_table(struct ufs_hba *hba, struct scsi_cmd *pccb)
 {
 	struct utp_transfer_req_desc *req_desc = hba->utrdl;
 	struct ufshcd_sg_entry *prd_table = hba->ucd_prdt_ptr;
 	ulong datalen = pccb->datalen;
-	int table_length;
+	size_t seg_size = ufshcd_prdt_segment_size(hba);
+	int table_length = 0;
 	u8 *buf;
-	int i;
 
 	if (!datalen) {
 		req_desc->prd_table_length = 0;
 		ufshcd_cache_flush(req_desc, sizeof(*req_desc));
-		return;
+		return 0;
 	}
 
-	table_length = DIV_ROUND_UP(pccb->datalen, MAX_PRDT_ENTRY);
+	if (datalen > seg_size * MAX_BUFF) {
+		dev_err(hba->dev, "SCSI request too large for PRDT: len=0x%lx max=0x%zx\n",
+			datalen, seg_size * MAX_BUFF);
+		return -EINVAL;
+	}
+
 	buf = pccb->pdata;
-	i = table_length;
-	while (--i) {
-		prepare_prdt_desc(hba, &prd_table[table_length - i - 1], buf,
-				  MAX_PRDT_ENTRY - 1);
-		buf += MAX_PRDT_ENTRY;
-		datalen -= MAX_PRDT_ENTRY;
+	while (datalen) {
+		ulong len = min_t(ulong, datalen, seg_size);
+
+		prepare_prdt_desc(hba,
+				  ufshcd_prdt_entry(hba, table_length),
+				  buf, len - 1);
+		buf += len;
+		datalen -= len;
+		table_length++;
 	}
 
-	prepare_prdt_desc(hba, &prd_table[table_length - i - 1], buf, datalen - 1);
-
-	req_desc->prd_table_length = table_length;
-	ufshcd_cache_flush(prd_table, sizeof(*prd_table) * table_length);
+	if (hba->quirks & UFSHCD_QUIRK_PRDT_BYTE_GRAN)
+		req_desc->prd_table_length =
+			cpu_to_le16(table_length * ufshcd_sg_entry_size(hba));
+	else
+		req_desc->prd_table_length = cpu_to_le16(table_length);
+	ufshcd_cache_flush(prd_table,
+			   ufshcd_sg_entry_size(hba) * table_length);
 	ufshcd_cache_flush(req_desc, sizeof(*req_desc));
+
+	return 0;
 }
 
 static int ufs_scsi_exec(struct udevice *scsi_dev, struct scsi_cmd *pccb)
 {
 	struct ufs_hba *hba = dev_get_uclass_priv(scsi_dev->parent);
+	struct ufshcd_low_bounce bounce;
 	u32 upiu_flags;
 	int ocs, result = 0;
 	u8 scsi_status;
+	int ret;
+	bool copy_back = false;
+
+	ret = ufshcd_low_bounce_start(hba, pccb, &bounce);
+	if (ret)
+		return ret;
 
 	ufshcd_prepare_req_desc_hdr(hba, &upiu_flags, pccb->dma_dir);
 	ufshcd_prepare_utp_scsi_cmd_upiu(hba, pccb, upiu_flags);
-	prepare_prdt_table(hba, pccb);
+	ret = prepare_prdt_table(hba, pccb);
+	if (ret)
+		goto out;
 
 	ufshcd_cache_flush(pccb->pdata, pccb->datalen);
 
-	ufshcd_send_command(hba, TASK_TAG);
-
-	ufshcd_cache_invalidate(pccb->pdata, pccb->datalen);
+	ret = ufshcd_send_command(hba, TASK_TAG, true);
+	if (ret)
+		goto out;
 
 	ocs = ufshcd_get_tr_ocs(hba);
 	switch (ocs) {
@@ -1682,28 +1904,39 @@ static int ufs_scsi_exec(struct udevice *scsi_dev, struct scsi_cmd *pccb)
 			result = ufshcd_get_rsp_upiu_result(hba->ucd_rsp_ptr);
 
 			scsi_status = result & MASK_SCSI_STATUS;
-			if (scsi_status)
-				return -EINVAL;
+			if (scsi_status) {
+				ret = -EINVAL;
+				break;
+			}
 
+			if (pccb->dma_dir == DMA_FROM_DEVICE)
+				ufshcd_cache_invalidate(pccb->pdata, pccb->datalen);
+			copy_back = true;
+			ret = 0;
 			break;
 		case UPIU_TRANSACTION_REJECT_UPIU:
 			/* TODO: handle Reject UPIU Response */
 			dev_err(hba->dev,
 				"Reject UPIU not fully implemented\n");
-			return -EINVAL;
+			ret = -EINVAL;
+			break;
 		default:
 			dev_err(hba->dev,
 				"Unexpected request response code = %x\n",
 				result);
-			return -EINVAL;
+			ret = -EINVAL;
+			break;
 		}
 		break;
 	default:
 		dev_err(hba->dev, "OCS error from controller = %x\n", ocs);
-		return -EINVAL;
+		ret = -EINVAL;
+		break;
 	}
 
-	return 0;
+out:
+	ufshcd_low_bounce_stop(pccb, &bounce, copy_back);
+	return ret;
 }
 
 static inline int ufshcd_read_desc(struct ufs_hba *hba, enum desc_idn desc_id,
@@ -2006,6 +2239,10 @@ static int ufshcd_change_power_mode(struct ufs_hba *hba,
 		return 0;
 	}
 
+	ret = ufshcd_ops_pwr_change_notify(hba, PRE_CHANGE, pwr_mode);
+	if (ret)
+		return ret;
+
 	/*
 	 * Configure attributes for power mode change with below.
 	 * - PA_RXGEAR, PA_ACTIVERXDATALANES, PA_RXTERMINATION,
@@ -2048,7 +2285,7 @@ static int ufshcd_change_power_mode(struct ufs_hba *hba,
 	/* Copy new Power Mode to power info */
 	memcpy(&hba->pwr_info, pwr_mode, sizeof(struct ufs_pa_layer_attr));
 
-	return ret;
+	return ufshcd_ops_pwr_change_notify(hba, POST_CHANGE, pwr_mode);
 }
 
 /**
@@ -2192,6 +2429,7 @@ int ufshcd_probe(struct udevice *ufs_dev, struct ufs_hba_ops *hba_ops)
 
 	hba->dev = ufs_dev;
 	hba->ops = hba_ops;
+	ufshcd_set_sg_entry_size(hba, sizeof(struct ufshcd_sg_entry));
 
 	if (device_is_on_pci_bus(ufs_dev)) {
 		mmio_base = dm_pci_map_bar(ufs_dev, PCI_BASE_ADDRESS_0, 0, 0,
@@ -2209,6 +2447,7 @@ int ufshcd_probe(struct udevice *ufs_dev, struct ufs_hba_ops *hba_ops)
 		dev_err(hba->dev, "Host controller init failed: %i\n", err);
 		return err;
 	}
+	scsi_plat->max_bytes_per_req = MAX_BUFF * ufshcd_prdt_segment_size(hba);
 
 	/* Read capabilities registers */
 	hba->capabilities = ufshcd_readl(hba, REG_CONTROLLER_CAPABILITIES);
