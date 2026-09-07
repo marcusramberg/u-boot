@@ -3261,8 +3261,6 @@
 				clocks = <&cmu_hsi0 CLK_GOUT_HSI0_USB31DRD_I_USB31DRD_REF_CLK_40>;
 				clock-names = "ref";
 				interrupts = <GIC_SPI 402 IRQ_TYPE_LEVEL_HIGH 0>;
-				phys = <&usbdrd31_phy 0>, <&usbdrd31_phy 1>;
-				phy-names = "usb2-phy", "usb3-phy";
 				snps,has-lpm-erratum;
 				snps,dis_u2_susphy_quirk;
 				snps,dis_u3_susphy_quirk;
