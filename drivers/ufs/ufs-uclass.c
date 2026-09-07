@@ -2565,6 +2565,36 @@ int ufs_probe(void)
 	return 0;
 }
 
+void ufs_stop_all(void)
+{
+	struct udevice *dev;
+	struct uclass *uc;
+
+	if (uclass_get(UCLASS_UFS, &uc))
+		return;
+
+	uclass_foreach_dev(dev, uc) {
+		struct ufs_hba *hba = dev_get_uclass_priv(dev);
+
+		if (!device_active(dev) || !hba || !hba->mmio_base)
+			continue;
+
+		ufshcd_writel(hba, 0, REG_UTP_TRANSFER_REQ_LIST_RUN_STOP);
+		ufshcd_writel(hba, 0, REG_UTP_TASK_REQ_LIST_RUN_STOP);
+		ufshcd_writel(hba, 0, REG_INTERRUPT_ENABLE);
+		ufshcd_writel(hba, ufshcd_readl(hba, REG_INTERRUPT_STATUS),
+			      REG_INTERRUPT_STATUS);
+
+		ufshcd_hba_stop(hba);
+
+		/* Must not be left armed at memory the kernel now owns. */
+		ufshcd_writel(hba, 0, REG_UTP_TRANSFER_REQ_LIST_BASE_L);
+		ufshcd_writel(hba, 0, REG_UTP_TRANSFER_REQ_LIST_BASE_H);
+		ufshcd_writel(hba, 0, REG_UTP_TASK_REQ_LIST_BASE_L);
+		ufshcd_writel(hba, 0, REG_UTP_TASK_REQ_LIST_BASE_H);
+	}
+}
+
 U_BOOT_DRIVER(ufs_scsi) = {
 	.id = UCLASS_SCSI,
 	.name = "ufs_scsi",

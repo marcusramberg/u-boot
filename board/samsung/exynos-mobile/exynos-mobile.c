@@ -16,11 +16,13 @@
 #include <env.h>
 #include <errno.h>
 #include <init.h>
+#include <linux/arm-smccc.h>
 #include <linux/sizes.h>
 #include <lmb.h>
 #include <part.h>
 #include <stdbool.h>
 #include <string.h>
+#include <ufs.h>
 
 DECLARE_GLOBAL_DATA_PTR;
 
@@ -468,4 +470,38 @@ int misc_init_r(void)
 		log_warning("%s: fastboot setup skipped (%d)\n", __func__, ret);
 
 	return 0;
+}
+
+/*
+ * ABL and U-Boot both drive the UFS controller with FMP descriptor type 3, i.e.
+ * a 128-byte PRDT stride. Linux's exynos-ufshc gives up on FMP early on this
+ * SoC and keeps writing standard 16-byte PRDT entries, so unless the descriptor
+ * type is put back the controller reads every segment after the first from the
+ * wrong offset and faults on the system bus (IS.SBFES) on the first
+ * multi-segment transfer -- which makes the root filesystem unreadable.
+ *
+ * FMPSECURITY0 lives in the secure UFSP block, so this survives both HCE reset
+ * and unbinding the driver; the SMC is the only way back.
+ */
+#define SMC_CMD_FMP_SECURITY			\
+	ARM_SMCCC_CALL_VAL(ARM_SMCCC_FAST_CALL, ARM_SMCCC_SMC_64, \
+			   ARM_SMCCC_OWNER_SIP, 0x1810)
+#define SMU_EMBEDDED				0
+#define CFG_DESCTYPE_0				0
+
+static void exynos_ufs_fmp_restore_desctype(void)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(SMC_CMD_FMP_SECURITY, 0, SMU_EMBEDDED, CFG_DESCTYPE_0,
+		      0, 0, 0, 0, &res);
+	if (res.a0)
+		log_warning("%s: FMP_SECURITY(DESCTYPE_0) failed: %ld\n",
+			    __func__, res.a0);
+}
+
+void board_quiesce_devices(void)
+{
+	ufs_stop_all();
+	exynos_ufs_fmp_restore_desctype();
 }
