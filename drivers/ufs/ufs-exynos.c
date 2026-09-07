@@ -522,8 +522,7 @@ static int exynos_ufs_init(struct ufs_hba *hba)
 	}
 
 	if (priv->is_zuma) {
-		hba->quirks |= UFSHCD_QUIRK_BROKEN_64BIT_ADDRESS |
-			       UFSHCI_QUIRK_SKIP_MANUAL_WB_FLUSH_CTRL |
+		hba->quirks |= UFSHCI_QUIRK_SKIP_MANUAL_WB_FLUSH_CTRL |
 			       UFSHCD_QUIRK_SKIP_DEF_UNIPRO_TIMEOUT_SETTING;
 	} else {
 		hba->quirks |= UFSHCD_QUIRK_BROKEN_64BIT_ADDRESS |
@@ -736,6 +735,32 @@ static bool exynos_ufs_is_hs_mode(const struct ufs_pa_layer_attr *pwr_mode)
 	       pwr_mode->pwr_tx == FASTAUTO_MODE;
 }
 
+/* This driver only carries gs101's HS power-mode PHY calibration; zuma has its
+ * own pre-init table but reuses tensor_gs101_{pre,post}_pwr_hs_cfg. At the
+ * device's full HS-G4 rate B the link trains but then takes data-link errors on
+ * every transfer (UECDL TCx_REPLAY_TIMER_EXPIRED / NAC_FRAME_SYNTAX_ERROR) and
+ * commands fail with OCS 0xf. Cap zuma to HS-G1 rate A, still ~145 MB/s a lane.
+ */
+static int exynos_ufs_get_max_pwr_mode(struct ufs_hba *hba,
+				       struct ufs_pwr_mode_info *max_pwr_info)
+{
+	struct exynos_ufs_priv *priv = dev_get_priv(hba->dev);
+	struct ufs_pa_layer_attr *pwr = &max_pwr_info->info;
+
+	if (!priv->is_zuma)
+		return 0;
+
+	if (pwr->gear_rx > UFS_HS_G1)
+		pwr->gear_rx = UFS_HS_G1;
+	if (pwr->gear_tx > UFS_HS_G1)
+		pwr->gear_tx = UFS_HS_G1;
+	pwr->hs_rate = PA_HS_MODE_A;
+
+	dev_notice(hba->dev, "capped to HS-G1 rate A\n");
+
+	return 0;
+}
+
 static int exynos_ufs_pwr_change_notify(struct ufs_hba *hba,
 					enum ufs_notify_change_status status,
 					struct ufs_pa_layer_attr *pwr_mode)
@@ -759,11 +784,11 @@ static int exynos_ufs_pwr_change_notify(struct ufs_hba *hba,
 		unipro_writel(priv, 32000, UNIPRO_DME_POWERMODE_REQ_REMOTEL2TIMER1);
 		unipro_writel(priv, 16000, UNIPRO_DME_POWERMODE_REQ_REMOTEL2TIMER2);
 
-		if (priv->reg_phy)
+		if (priv->reg_phy && !priv->is_zuma)
 			exynos_ufs_phy_apply_cfg(priv, tensor_gs101_pre_pwr_hs_cfg);
 		dev_notice(hba->dev, "UFS HS pre power-mode calibration\n");
 	} else if (status == POST_CHANGE) {
-		if (priv->reg_phy)
+		if (priv->reg_phy && !priv->is_zuma)
 			exynos_ufs_phy_apply_cfg(priv, tensor_gs101_post_pwr_hs_cfg);
 		dev_notice(hba->dev, "UFS HS post power-mode calibration\n");
 	}
@@ -787,6 +812,7 @@ static void exynos_ufs_setup_xfer_req(struct ufs_hba *hba, int tag,
 
 static struct ufs_hba_ops exynos_ufs_hba_ops = {
 	.init = exynos_ufs_init,
+	.get_max_pwr_mode = exynos_ufs_get_max_pwr_mode,
 	.pwr_change_notify = exynos_ufs_pwr_change_notify,
 	.hce_enable_notify = exynos_ufs_hce_enable_notify,
 	.link_startup_notify = exynos_ufs_link_startup_notify,

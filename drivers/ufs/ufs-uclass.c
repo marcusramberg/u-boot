@@ -146,7 +146,12 @@ static int ufshcd_low_bounce_start(struct ufs_hba *hba, struct scsi_cmd *pccb,
 
 	align = ufshcd_dma_data_align(hba);
 	size = ALIGN(pccb->datalen, align);
-	ret = lmb_alloc_mem(LMB_MEM_ALLOC_MAX, align, &addr, size, LMB_NONE);
+	if (hba->quirks & UFSHCD_QUIRK_BROKEN_64BIT_ADDRESS)
+		ret = lmb_alloc_mem(LMB_MEM_ALLOC_MAX, align, &addr, size,
+				    LMB_NONE);
+	else
+		ret = lmb_alloc_mem(LMB_MEM_ALLOC_ANY, align, &addr, size,
+				    LMB_NONE);
 	if (ret) {
 		dev_err(hba->dev,
 			"failed to allocate low data bounce buffer (%d)\n", ret);
@@ -1137,6 +1142,8 @@ static int ufshcd_send_command(struct ufs_hba *hba, unsigned int task_tag,
 		if (enabled_intr_status & UFSHCD_ERROR_MASK) {
 			dev_err(hba->dev, "Error in status:%08x\n",
 				enabled_intr_status);
+
+			ufshcd_dump_utp_timeout(hba, task_tag);
 
 			return -1;
 		}
