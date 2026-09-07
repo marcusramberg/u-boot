@@ -213,6 +213,8 @@ static int hsi2c_get_clk_details(struct udevice *dev)
 	 */
 	t_ftl_cycle = (readl(&hsregs->usi_conf) >> 16) & 0x7;
 	utemp0 = (clkin / op_clk) - 8 - 2 * t_ftl_cycle;
+	printf("hsi2c: clkin=%lu op_clk=%u ftl=%u utemp0=%u\n",
+	       clkin, op_clk, t_ftl_cycle, utemp0);
 
 	/*
 	 * autov9 takes a plain divider rather than the per-phase FS1/FS2
@@ -230,6 +232,8 @@ static int hsi2c_get_clk_details(struct udevice *dev)
 		if ((utemp1 < 512) && (utemp1 > 4)) {
 			i2c_bus->clk_cycle = utemp1 - 2;
 			i2c_bus->clk_div = i;
+			printf("hsi2c: clk_div=%u clk_cycle=%u\n",
+			       i, utemp1 - 2);
 			return 0;
 		}
 	}
