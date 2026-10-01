@@ -14,17 +14,24 @@
 #include <asm/system.h>
 #include <asm/armv8/mmu.h>
 
-static ulong reg0 __section(".data");
+static ulong reg0 __used __section(".data");
 
 /**
  * Save x0 register value, assuming previous bootloader set it to
  * point on loaded fdt or (for older linux kernels)atags.
  */
-void save_boot_params(ulong r0)
-{
-	reg0 = r0;
-	save_boot_params_ret();
-}
+/*
+ * save_boot_params() runs before start.S sets up a stack, and the boot
+ * protocol leaves SP undefined, so it must not touch the stack.
+ */
+asm(".pushsection .text.save_boot_params, \"ax\"\n"
+    ".globl save_boot_params\n"
+    ".type save_boot_params, %function\n"
+    "save_boot_params:\n"
+    "	adrp	x1, reg0\n"
+    "	str	x0, [x1, #:lo12:reg0]\n"
+    "	b	save_boot_params_ret\n"
+    ".popsection");
 
 bool is_addr_accessible(phys_addr_t addr)
 {

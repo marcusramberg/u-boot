@@ -10,6 +10,10 @@ config XIAOMI_MERLIN
 config XIAOMI_LANCELOT
 	bool "Xiaomi Redmi 9"
 	depends on TARGET_MT6768
+
+config MOTOROLA_LAMUC
+	bool "Motorola Moto G17"
+	depends on TARGET_MT6768
 endchoice
 
 config SYS_SOC

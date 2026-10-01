@@ -869,6 +869,49 @@ static void mt6768_fixup_payload_dtb(void)
 	}
 }
 
+/*
+ * lk allocates the framebuffer at runtime; point /framebuffer in U-Boot's own
+ * dtb at lk's mblock. Runs before relocation so the patched blob gets copied.
+ */
+static void mt6768_lk_fb_to_simplefb(void)
+{
+	const void *lk = (const void *)get_prev_bl_fdt_addr();
+	int resv, sub, fb;
+	fdt_addr_t base;
+	fdt_size_t size;
+	fdt64_t reg[2];
+	u64 page;
+
+	if (!lk || fdt_check_header(lk))
+		return;
+	resv = fdt_path_offset(lk, "/reserved-memory");
+	fb = fdt_path_offset(gd->fdt_blob, "/framebuffer");
+	if (resv < 0 || fb < 0)
+		return;
+	fdt_for_each_subnode(sub, lk, resv) {
+		if (!strstr(fdt_get_name(lk, sub, NULL), "framebuffer"))
+			continue;
+		base = fdtdec_get_addr_size_auto_parent(lk, resv, sub, "reg",
+							0, &size, false);
+		if (base == FDT_ADDR_T_NONE)
+			return;
+		/*
+		 * lk scans out its second page after fastboot `continue`.
+		 * ponytail: fixed page guess, read the OVL scan-out address
+		 * instead once the display block is mapped.
+		 */
+		page = fdtdec_get_uint(gd->fdt_blob, fb, "stride", 0) *
+		       fdtdec_get_uint(gd->fdt_blob, fb, "height", 0);
+		reg[0] = cpu_to_fdt64(base + page);
+		reg[1] = cpu_to_fdt64(page);
+		fdt_setprop_inplace((void *)gd->fdt_blob, fb, "reg", reg,
+				    sizeof(reg));
+		return;
+	}
+}
+
+void mt6768_stage(int n);
+
 int dram_init(void)
 {
 	int ret = fdtdec_setup_mem_size_base();
@@ -888,6 +931,11 @@ int dram_init(void)
 	 * from the device tree; the end of this function feeds it back into
 	 * mem_map for the MMU.
 	 */
+	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC)) {
+		mt6768_lk_fb_to_simplefb();
+		mt6768_stage(2);
+	}
+
 	/* build the memmap */
 	int simplefb = fdt_path_offset(gd->fdt_blob, "/framebuffer");
 	if (simplefb >= 0) {
@@ -950,7 +998,31 @@ void reset_cpu(void)
 
 int board_init(void) {
 	mt6768_trace("[UBOOT] board_init reached (past relocation)\n");
+	mt6768_stage(3);
 	return 0;
+}
+
+/* One line per lk reservation, short enough to photograph off the screen. */
+static void mt6768_print_lk_resv(void)
+{
+	const void *lk = (const void *)get_prev_bl_fdt_addr();
+	int resv, sub;
+	fdt_addr_t base;
+	fdt_size_t size;
+
+	if (!lk || fdt_check_header(lk)) {
+		printf("lk FDT: none at %p\n", lk);
+		return;
+	}
+	resv = fdt_path_offset(lk, "/reserved-memory");
+	printf("lk FDT %p reserved-memory:\n", lk);
+	fdt_for_each_subnode(sub, lk, resv) {
+		base = fdtdec_get_addr_size_auto_parent(lk, resv, sub, "reg",
+							0, &size, false);
+		if (base != FDT_ADDR_T_NONE)
+			printf(" %09llx %09llx %s\n", (u64)base, (u64)size,
+			       fdt_get_name(lk, sub, NULL));
+	}
 }
 
 int board_late_init(void)
@@ -962,6 +1034,7 @@ int board_late_init(void)
 	 * broken.
 	 */
 	mt6768_trace("[UBOOT] board_late_init reached\n");
+	mt6768_stage(4);
 
 	/*
 	 * Patch RAM into the original dtb right here, not waiting for booti.
@@ -1005,7 +1078,7 @@ int board_late_init(void)
 		/* screen curves at the edges: push down a few lines to clear */
 		printf("\n\n\n\n\n");
 		printf("==================================================\n");
-		printf("  U-Boot on Xiaomi lancelot (MT6768)\n");
+		printf("  U-Boot on %s (MT6768)\n", (const char *)fdt_getprop(gd->fdt_blob, 0, "model", NULL));
 		printf("  %s\n", version_string);
 		printf("  DRAM : %llu MiB\n",
 		       (unsigned long long)(gd->ram_size >> 20));
@@ -1015,6 +1088,11 @@ int board_late_init(void)
 		mdelay(4000);
 	} else {
 		printf("%s: no video device found\n", __func__);
+	}
+
+	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC)) {
+		mt6768_stage(5);
+		mt6768_print_lk_resv();
 	}
 
 	ret = uclass_get_device(UCLASS_USB_GADGET_GENERIC, 0, &dev);

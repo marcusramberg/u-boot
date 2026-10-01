@@ -46,6 +46,21 @@
         format = "a8r8g8b8";
         status = "okay";
     };
+#elif defined(CONFIG_MOTOROLA_LAMUC)
+    model = "Motorola Moto G17";
+    compatible = "motorola,lamuc";
+
+    /* lk's address from its log; dram_init() replaces it from lk's FDT */
+    fb0: framebuffer {
+        compatible = "simple-framebuffer";
+        reg = <0 0x77916000 0 (1088 * 2400 * 4)>;
+        rot = <0>;
+        width = <1080>;
+        height = <2400>;
+        stride = <(1088 * 4)>;
+        format = "a8r8g8b8";
+        status = "okay";
+    };
 #else
     model = "MediaTek MT6768-based device";
     compatible = "generic,mt6768";
@@ -70,7 +85,12 @@
          * where the framebuffer reservation begins. U-Boot relocates to the
          * top of this region, so it has to be certain that it is real RAM.
          */
+#if defined(CONFIG_MOTOROLA_LAMUC)
+        /* lk's layout is unknown here: stay below the ramdisk at 0x47c80000 */
+        reg = <0 0x40000000 0 0x07c00000>;
+#else
         reg = <0 0x40000000 0 0x3dcb0000>;
+#endif
         device_type = "memory";
     };
 };

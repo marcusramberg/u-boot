@@ -10,6 +10,27 @@
 #include <asm/macro.h>
 #include <asm/armv8/mmu.h>
 
+/*
+ * Moto G17 bring-up: paint band \n into all three pages of lk's framebuffer,
+ * since which one is scanned out depends on what lk drew last.
+ */
+.macro	lamuc_band n, colour
+#ifdef CONFIG_MOTOROLA_LAMUC
+	ldr	x10, =(0x76f20000 + 1088 * 4 * 150 * \n)
+	ldr	w12, =\colour
+	mov	x13, #3
+9997:	ldr	x11, =(1088 * 142)
+	mov	x14, x10
+9998:	str	w12, [x14], #4
+	subs	x11, x11, #1
+	b.ne	9998b
+	ldr	x11, =(1088 * 4 * 2400)
+	add	x10, x10, x11
+	subs	x13, x13, #1
+	b.ne	9997b
+#endif
+.endm
+
 /*************************************************************************
  *
  * Startup Code (reset vector)
@@ -57,12 +78,14 @@ reset:
 	b	save_boot_params
 .globl	save_boot_params_ret
 save_boot_params_ret:
+	lamuc_band 0, 0xff808080
 
 #if CONFIG_POSITION_INDEPENDENT && !defined(CONFIG_XPL_BUILD)
 	/* Verify that we're 4K aligned.  */
 	adr	x0, _start
 	ands	x0, x0, #0xfff
 	b.eq	1f
+	lamuc_band 1, 0xffff0000
 0:
 	/*
 	 * FATAL, can't continue.
@@ -75,6 +98,7 @@ save_boot_params_ret:
 	wfi
 	b	0b
 1:
+	lamuc_band 1, 0xff00ff00
 
 	/*
 	 * Fix .rela.dyn relocations. This allows U-Boot to be loaded to and
@@ -102,6 +126,7 @@ pie_skip_reloc:
 	cmp	x2, x3
 	b.lo	pie_fix_loop
 pie_fixup_done:
+	lamuc_band 2, 0xff0000ff
 #endif
 
 #if defined(CONFIG_ARMV8_SPL_EXCEPTION_VECTORS) || !defined(CONFIG_XPL_BUILD)
@@ -137,6 +162,8 @@ pie_fixup_done:
 	msr	cpacr_el1, x0			/* Enable FP/SIMD */
 0:
 	msr	daifclr, #0x4			/* Unmask SError interrupts */
+	isb
+	lamuc_band 3, 0xffffff00
 
 #if CONFIG_COUNTER_FREQUENCY
 	branch_if_not_highest_el x0, 4f
@@ -205,6 +232,7 @@ slave_cpu:
 #endif /* CONFIG_ARMV8_MULTIENTRY */
 master_cpu:
 	msr	SPSel, #1		/* make sure we use SP_ELx */
+	lamuc_band 4, 0xff00ffff
 	bl	_main
 
 /*-----------------------------------------------------------------------*/

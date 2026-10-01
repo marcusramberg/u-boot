@@ -10,9 +10,11 @@
 #include <dm/uclass-internal.h>
 
 void mt6768_trace(const char *msg);
+void mt6768_stage(int n);
 
 int arch_cpu_init(void)
 {
+	mt6768_stage(0);
 	mt6768_trace("[UBOOT] arch_cpu_init\n");
 	icache_enable();
 
