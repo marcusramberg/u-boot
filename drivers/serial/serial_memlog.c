@@ -19,56 +19,65 @@
  *
  * The format is Linux's persistent_ram_buffer, so the log comes back out of
  * /sys/fs/pstore/console-ramoops on the next boot with no tooling at all.
+ * A reg property in the DT node overrides the lancelot address.
  */
 
+#include <command.h>
 #include <errno.h>
+#include <malloc.h>
+#include <vsprintf.h>
 #include <linux/types.h>
 #include <dm.h>
 #include <serial.h>
 #include <asm/io.h>
 
-#define MEMLOG_BASE	0x4d05f000	/* ramoops console zone */
+#define MEMLOG_BASE	0x4d05f000	/* lancelot console zone, if DT has no reg */
 #define MEMLOG_SIZE	0x00040000	/* 256 KiB */
 #define MEMLOG_MAGIC	0x43474244	/* "DBGC" -- Linux PERSISTENT_RAM_SIG */
 
 /*
- * struct persistent_ram_buffer from Linux: sig, then start and size (atomic_t
- * there, plain u32 on the wire), then the text. Appending without wrapping
- * keeps a truncated log readable if U-Boot dies mid-write.
+ * struct persistent_ram_buffer from Linux: sig, the write offset and the
+ * number of valid bytes, then a ring of text. Linux reads it back oldest
+ * first as data[start..size) + data[0..start).
  */
 struct memlog_hdr {
 	u32 magic;
-	u32 len;	/* persistent_ram calls this `start` */
-	u32 mirror;	/* persistent_ram calls this `size`; must track `len` */
+	u32 start;
+	u32 size;
+	u8 data[];
 };
 
-#define MEMLOG_TEXT	(MEMLOG_BASE + 12)
-#define MEMLOG_TEXT_MAX	(MEMLOG_SIZE - 12)
+/* .data, not .bss: set before relocation and carried across it */
+static ulong memlog_base __section(".data") = MEMLOG_BASE;
+static ulong memlog_cap __section(".data") = MEMLOG_SIZE - sizeof(struct memlog_hdr);
 
 static void memlog_reset(void)
 {
-	struct memlog_hdr __iomem *h = (void *)(uintptr_t)MEMLOG_BASE;
+	struct memlog_hdr __iomem *h = (void *)memlog_base;
 
 	writel(MEMLOG_MAGIC, &h->magic);
-	writel(0, &h->len);
-	writel(0, &h->mirror);
+	writel(0, &h->start);
+	writel(0, &h->size);
 }
 
 static void memlog_putc_raw(int ch)
 {
-	struct memlog_hdr __iomem *h = (void *)(uintptr_t)MEMLOG_BASE;
-	u32 len;
+	struct memlog_hdr __iomem *h = (void *)memlog_base;
+	u32 start, size;
 
-	if (readl(&h->magic) != MEMLOG_MAGIC)
+	start = readl(&h->start);
+	size = readl(&h->size);
+	if (readl(&h->magic) != MEMLOG_MAGIC || start >= memlog_cap ||
+	    size > memlog_cap) {
 		memlog_reset();
+		start = 0;
+		size = 0;
+	}
 
-	len = readl(&h->len);
-	if (len >= MEMLOG_TEXT_MAX)
-		return;			/* full: keep the beginning, drop the rest */
-
-	writeb(ch, (void *)(uintptr_t)(MEMLOG_TEXT + len));
-	writel(len + 1, &h->len);
-	writel(len + 1, &h->mirror);
+	writeb(ch, &h->data[start]);
+	writel(start + 1 == memlog_cap ? 0 : start + 1, &h->start);
+	if (size < memlog_cap)
+		writel(size + 1, &h->size);
 }
 
 #ifdef CONFIG_DEBUG_UART_MEMLOG
@@ -112,10 +121,18 @@ static int memlog_serial_setbrg(struct udevice *dev, int baudrate)
 
 static int memlog_serial_probe(struct udevice *dev)
 {
+	fdt_size_t size;
+	fdt_addr_t base = dev_read_addr_size(dev, &size);
+
 	/*
-	 * Do not reset here. When the debug UART is enabled it has already
-	 * logged the early boot, and probe happens much later.
+	 * Do not reset here: the ring keeps earlier boots, which is the point
+	 * after a hang, and the debug UART may already have logged this one.
 	 */
+	if (base != FDT_ADDR_T_NONE && size > sizeof(struct memlog_hdr)) {
+		memlog_base = base;
+		memlog_cap = size - sizeof(struct memlog_hdr);
+	}
+
 	return 0;
 }
 
@@ -139,3 +156,33 @@ U_BOOT_DRIVER(serial_memlog) = {
 	.ops = &memlog_serial_ops,
 	.flags = DM_FLAG_PRE_RELOC,
 };
+
+/* Print the newest part of the ring, e.g. what a hung earlier boot logged. */
+static int do_memlog(struct cmd_tbl *cmdtp, int flag, int argc,
+		     char *const argv[])
+{
+	struct memlog_hdr *h = (void *)memlog_base;
+	ulong want = argc > 1 ? hextoul(argv[1], NULL) : 0x1000;
+	u32 start = h->start, size = h->size, i;
+	char *buf;
+
+	if (h->magic != MEMLOG_MAGIC || start >= memlog_cap || size > memlog_cap)
+		return CMD_RET_FAILURE;
+	if (want > size)
+		want = size;
+
+	/* snapshot first: printing appends to the same ring */
+	buf = malloc(want + 1);
+	if (!buf)
+		return CMD_RET_FAILURE;
+	for (i = 0; i < want; i++)
+		buf[i] = h->data[(start + memlog_cap - want + i) % memlog_cap];
+	buf[want] = 0;
+	puts(buf);
+	free(buf);
+
+	return 0;
+}
+
+U_BOOT_CMD(memlog, 2, 0, do_memlog, "print the end of the RAM console",
+	   "[bytes (hex, default 1000)]");
