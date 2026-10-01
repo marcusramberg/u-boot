@@ -59,9 +59,6 @@ static void uboot_trace(const char *msg)
 
 int board_early_init_f(void)
 {
-	/* lk leaves the watchdog armed; WDT_MODE key without the enable bit */
-	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC))
-		writel(0x22000000, 0x10007000);
 
 	uboot_trace("\n[UBOOT] board_early_init_f reached\n");
 	return 0;
@@ -81,7 +78,7 @@ static int do_chainload(struct cmd_tbl *cmdtp, int flag, int argc,
 			char *const argv[])
 {
 	void (*entry)(ulong x0, ulong x1, ulong x2, ulong x3);
-	ulong addr;
+	ulong addr, size;
 
 	if (argc != 2)
 		return CMD_RET_USAGE;
@@ -92,11 +89,18 @@ static int do_chainload(struct cmd_tbl *cmdtp, int flag, int argc,
 		return CMD_RET_FAILURE;
 	}
 
-	printf("## chainloading %lx, x0=%llx\n", addr,
-	       (u64)get_prev_bl_fdt_addr());
+	/*
+	 * Run it at its link address like lk does: started from elsewhere,
+	 * builds with pre-relocation drivers hang before the console is up.
+	 * The running U-Boot has relocated away, so this area is free.
+	 */
+	size = readq(addr + 0x10);
+	printf("## chainloading %lx (%lx bytes) at %x, x0=%llx\n", addr, size,
+	       CONFIG_TEXT_BASE, (u64)get_prev_bl_fdt_addr());
 	dm_remove_devices_active();
+	memmove((void *)CONFIG_TEXT_BASE, (void *)addr, size);
 	cleanup_before_linux();
-	entry = (void *)addr;
+	entry = (void *)CONFIG_TEXT_BASE;
 	entry(get_prev_bl_fdt_addr(), 0, 0, 0);
 
 	return CMD_RET_FAILURE;

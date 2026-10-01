@@ -13,6 +13,7 @@
 #include <dm.h>
 #include <env.h>
 #include <command.h>
+#include <console.h>
 #include <video.h>
 #include <version_string.h>
 #include <dm/device-internal.h>
@@ -998,6 +999,35 @@ int board_init(void) {
 	return 0;
 }
 
+/* Show lk's ramoops parameters and where persistent_ram zones actually sit. */
+static void mt6768_print_pstore(const void *lk, int node, u64 base, u64 size)
+{
+	static const char * const props[] = {
+		"compatible", "record-size", "console-size", "ftrace-size",
+		"pmsg-size", "ecc-size",
+	};
+	const fdt32_t *v;
+	u64 off;
+	int i, len;
+
+	for (i = 0; i < ARRAY_SIZE(props); i++) {
+		v = fdt_getprop(lk, node, props[i], &len);
+		if (!v)
+			continue;
+		if (i == 0)
+			printf("   %s = %s\n", props[i], (const char *)v);
+		else
+			printf("   %s = %x\n", props[i], fdt32_to_cpu(*v));
+	}
+	for (off = 0; off < size; off += 0x1000) {
+		u32 *h = (u32 *)(base + off);
+
+		if (h[0] == 0x43474244)
+			printf("   DBGC at +%05llx start=%x size=%x\n",
+			       off, h[1], h[2]);
+	}
+}
+
 /* One line per lk reservation, short enough to photograph off the screen. */
 static void mt6768_print_lk_resv(void)
 {
@@ -1018,6 +1048,8 @@ static void mt6768_print_lk_resv(void)
 		if (base != FDT_ADDR_T_NONE)
 			printf(" %09llx %09llx %s\n", (u64)base, (u64)size,
 			       fdt_get_name(lk, sub, NULL));
+		if (strstr(fdt_get_name(lk, sub, NULL), "pstore"))
+			mt6768_print_pstore(lk, sub, base, size);
 	}
 }
 
@@ -1064,8 +1096,8 @@ int board_late_init(void)
 	 * several outputs at once.
 	 */
 	if (uclass_first_device_err(UCLASS_VIDEO, &dev) == 0) {
-		env_set("stdout", "serial,vidconsole");
-		env_set("stderr", "serial,vidconsole");
+		env_set("stdout", env_get("con_out"));
+		env_set("stderr", env_get("con_out"));
 
 		/*
 		 * U-Boot's banner is printed before the console moves to the
@@ -1089,6 +1121,10 @@ int board_late_init(void)
 
 	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC))
 		mt6768_print_lk_resv();
+
+	/* `fastboot oem console` reads this back: a shell without a UART */
+	if (IS_ENABLED(CONFIG_FASTBOOT_CMD_OEM_CONSOLE))
+		console_record_reset_enable();
 
 	/* lamuc probes USB on `fastboot usb 0`, so a USB hang keeps the menu */
 	if (!IS_ENABLED(CONFIG_MOTOROLA_LAMUC)) {

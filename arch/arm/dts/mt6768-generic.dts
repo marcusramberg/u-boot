@@ -51,6 +51,17 @@
     model = "Motorola Moto G17";
     compatible = "motorola,lamuc";
 
+    /*
+     * Console ring in ramoops' console zone: lk's pstore mblock is
+     * 0x4d010000+0xe0000 with console 0x40000 and pmsg 0x80000, so the
+     * 0x20000 of dump records come first.
+     */
+    memlog: serial-memlog@4d030000 {
+        compatible = "u-boot,serial-memlog";
+        reg = <0 0x4d030000 0 0x40000>;
+        bootph-all;
+    };
+
     /* lk's address from its log; dram_init() replaces it from lk's FDT */
     fb0: framebuffer {
         compatible = "simple-framebuffer";
@@ -82,7 +93,7 @@
 
     chosen {
         tick-timer = &gpt;
-#if defined(CONFIG_XIAOMI_LANCELOT)
+#if defined(CONFIG_XIAOMI_LANCELOT) || defined(CONFIG_MOTOROLA_LAMUC)
         stdout-path = &memlog;
 #endif
     };

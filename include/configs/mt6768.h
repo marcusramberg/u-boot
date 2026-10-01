@@ -37,15 +37,23 @@
  * the very first line of the comment.
  */
 #define CFG_EXTRA_ENV_SETTINGS \
-	"stdout=serial,vidconsole\0" \
-	"stderr=serial,vidconsole\0" \
-	"stdin=serial,button-kbd\0" \
+	"con_in=serial,button-kbd,usbacm\0" \
+	"con_out=serial,vidconsole,usbacm\0" \
+	"stdin=serial,button-kbd,usbacm\0" \
+	"stdout=serial,vidconsole,usbacm\0" \
+	"stderr=serial,vidconsole,usbacm\0" \
+	"bootmenu_default=3\0" \
 	"bootmenu_0=Key states=button list; pause\0" \
 	"bootmenu_1=Board info=bdinfo; pause\0" \
-	"bootmenu_2=USB fastboot (stage + continue chainloads)=run fbchain\0" \
-	"fbchain=setenv filesize; fastboot usb 0; if test -n \"${filesize}\"; " \
+	"bootmenu_2=Show log=memlog 1800; pause\0" \
+	"bootmenu_3=USB fastboot (stage + continue chainloads)=run fbchain\0" \
+	"bootmenu_4=U-Boot prompt=setenv menu_off 1\0" \
+	"bootmenu_5=Reset=reset\0" \
+	"fbchain=setenv stdin serial,button-kbd; setenv stdout serial,vidconsole; " \
+		"setenv stderr serial,vidconsole; setenv filesize; fastboot usb 0; " \
+		"setenv stdin ${con_in}; setenv stdout ${con_out}; " \
+		"setenv stderr ${con_out}; if test -n \"${filesize}\"; " \
 		"then chainload " __stringify(CONFIG_FASTBOOT_BUF_ADDR) "; fi\0" \
-	"bootmenu_3=Reset=reset\0" \
 	"bootargs=console=tty0 earlycon root=PARTUUID=1ace1007-02 rootwait rw " \
 		"loglevel=4 clk_ignore_unused pd_ignore_unused audit=0\0"
 
