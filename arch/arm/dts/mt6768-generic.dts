@@ -53,11 +53,12 @@
     /* lk's address from its log; dram_init() replaces it from lk's FDT */
     fb0: framebuffer {
         compatible = "simple-framebuffer";
-        reg = <0 0x77916000 0 (1088 * 2400 * 4)>;
+        reg = <0 0x77916000 0 (1080 * 2400 * 4)>;
         rot = <0>;
         width = <1080>;
         height = <2400>;
-        stride = <(1088 * 4)>;
+        /* scan-out pitch is packed, unlike lk's 32-pixel aligned page size */
+        stride = <(1080 * 4)>;
         format = "a8r8g8b8";
         status = "okay";
     };

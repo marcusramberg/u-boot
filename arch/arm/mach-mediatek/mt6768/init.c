@@ -900,17 +900,16 @@ static void mt6768_lk_fb_to_simplefb(void)
 		 * ponytail: fixed page guess, read the OVL scan-out address
 		 * instead once the display block is mapped.
 		 */
-		page = fdtdec_get_uint(gd->fdt_blob, fb, "stride", 0) *
-		       fdtdec_get_uint(gd->fdt_blob, fb, "height", 0);
+		page = ALIGN(fdtdec_get_uint(gd->fdt_blob, fb, "width", 0), 32) *
+		       4 * fdtdec_get_uint(gd->fdt_blob, fb, "height", 0);
 		reg[0] = cpu_to_fdt64(base + page);
-		reg[1] = cpu_to_fdt64(page);
+		reg[1] = cpu_to_fdt64(fdtdec_get_uint(gd->fdt_blob, fb, "stride", 0) *
+				      fdtdec_get_uint(gd->fdt_blob, fb, "height", 0));
 		fdt_setprop_inplace((void *)gd->fdt_blob, fb, "reg", reg,
 				    sizeof(reg));
 		return;
 	}
 }
-
-void mt6768_stage(int n);
 
 int dram_init(void)
 {
@@ -931,10 +930,8 @@ int dram_init(void)
 	 * from the device tree; the end of this function feeds it back into
 	 * mem_map for the MMU.
 	 */
-	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC)) {
+	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC))
 		mt6768_lk_fb_to_simplefb();
-		mt6768_stage(2);
-	}
 
 	/* build the memmap */
 	int simplefb = fdt_path_offset(gd->fdt_blob, "/framebuffer");
@@ -998,7 +995,6 @@ void reset_cpu(void)
 
 int board_init(void) {
 	mt6768_trace("[UBOOT] board_init reached (past relocation)\n");
-	mt6768_stage(3);
 	return 0;
 }
 
@@ -1034,7 +1030,6 @@ int board_late_init(void)
 	 * broken.
 	 */
 	mt6768_trace("[UBOOT] board_late_init reached\n");
-	mt6768_stage(4);
 
 	/*
 	 * Patch RAM into the original dtb right here, not waiting for booti.
@@ -1090,10 +1085,8 @@ int board_late_init(void)
 		printf("%s: no video device found\n", __func__);
 	}
 
-	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC)) {
-		mt6768_stage(5);
+	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC))
 		mt6768_print_lk_resv();
-	}
 
 	ret = uclass_get_device(UCLASS_USB_GADGET_GENERIC, 0, &dev);
 	if (ret)
