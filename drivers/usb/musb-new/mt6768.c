@@ -298,20 +298,12 @@ static int mtk_musb_probe(struct udevice *dev)
 	pdata.config = glue->cfg->config;
 	pdata.mode = MUSB_PERIPHERAL;
 
-	host->host = musb_register(&pdata, &glue->dev, base);
-	if (!host->host)
+	/* musb_register() has no peripheral case with DM_USB_GADGET */
+	host->host = musb_init_controller(&pdata, &glue->dev, base);
+	if (IS_ERR_OR_NULL(host->host))
 		return -EIO;
 
-	/*
-	 * Do NOT call usb_add_gadget_udc() here. In theory it registers the
-	 * controller in the UDC list (other musb drivers do exactly that), but
-	 * on this device U-Boot dies inside probe. The result is losing the
-	 * screen entirely if probe runs before the console is up.
-	 *
-	 * So `fastboot usb 0` still reports "No UDC available in the system".
-	 * Another way is needed; check whether musb_gadget_setup() is called.
-	 */
-	return 0;
+	return usb_add_gadget_udc(&glue->dev, &host->host->g);
 }
 
 static int mtk_musb_remove(struct udevice *dev)
@@ -319,13 +311,26 @@ static int mtk_musb_remove(struct udevice *dev)
 	struct mtk_musb_glue *glue = dev_get_priv(dev);
 	struct musb_host_data *host = &glue->mdata;
 
-	printf("removing musb ...\n");
+	usb_del_gadget_udc(&host->host->g);
 	musb_stop(host->host);
 	free(host->host);
 	host->host = NULL;
 
 	return 0;
 }
+
+static int mtk_musb_handle_interrupts(struct udevice *dev)
+{
+	struct mtk_musb_glue *glue = dev_get_priv(dev);
+
+	glue->mdata.host->isr(0, glue->mdata.host);
+
+	return 0;
+}
+
+static const struct usb_gadget_generic_ops mtk_musb_gadget_ops = {
+	.handle_interrupts = mtk_musb_handle_interrupts,
+};
 
 static struct musb_fifo_cfg mtk_musb_mode_cfg[] = {
 	/* hw has 8 eps but set to 6 to avoid issues */
@@ -362,6 +367,7 @@ static const struct udevice_id mtk_musb_ids[] = {
 U_BOOT_DRIVER(mt6768_musb) = {
 	.name = "mt6768_musb",
 	.id = UCLASS_USB_GADGET_GENERIC,
+	.ops = &mtk_musb_gadget_ops,
 	.of_match = mtk_musb_ids,
 	.probe = mtk_musb_probe,
 	.remove	= mtk_musb_remove,

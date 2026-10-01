@@ -1088,10 +1088,13 @@ int board_late_init(void)
 	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC))
 		mt6768_print_lk_resv();
 
-	ret = uclass_get_device(UCLASS_USB_GADGET_GENERIC, 0, &dev);
-	if (ret)
-		printf("%s: no USB device found (err: %d), skipping\n",
-		       __func__, ret);
+	/* lamuc probes USB on `fastboot usb 0`, so a USB hang keeps the menu */
+	if (!IS_ENABLED(CONFIG_MOTOROLA_LAMUC)) {
+		ret = uclass_get_device(UCLASS_USB_GADGET_GENERIC, 0, &dev);
+		if (ret)
+			printf("%s: no USB device found (err: %d), skipping\n",
+			       __func__, ret);
+	}
 
 
 #ifdef CONFIG_POWER
