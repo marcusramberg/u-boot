@@ -517,16 +517,6 @@ static void __acm_tx(struct f_acm *f_acm)
 	} while (1);
 }
 
-static bool acm_connected(struct stdio_dev *dev)
-{
-	struct f_acm *f_acm = stdio_to_acm(dev);
-
-	/* give a chance to process udc irq */
-	dm_usb_gadget_handle_interrupts(f_acm->udc);
-
-	return f_acm->connected;
-}
-
 static int acm_add(struct usb_configuration *c)
 {
 	struct f_acm *f_acm;
@@ -649,13 +639,7 @@ static int acm_stdio_start(struct stdio_dev *dev)
 	else
 		return -ENODEV;
 
-	while (!acm_connected(dev)) {
-		if (ctrlc())
-			return -ECANCELED;
-
-		schedule();
-	}
-
+	/* output is buffered until a host connects, so don't block boot on it */
 	return 0;
 }
 
