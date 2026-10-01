@@ -29,6 +29,13 @@ config BUTTON_ADC
 	  Converter device. The ADC driver must use driver model. Buttons are
 	  configured using the device tree.
 
+config BUTTON_MTK
+	bool "MediaTek keypad and MT6358 PMIC keys"
+	depends on BUTTON && DM_PMIC
+	help
+	  Read the SoC keypad and the MT6358 power/home keys as configured by
+	  the previous bootloader.
+
 config BUTTON_GPIO
 	bool "Button gpio"
 	depends on BUTTON

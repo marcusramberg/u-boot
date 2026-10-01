@@ -228,6 +228,10 @@ static int pwrap_probe(struct udevice *dev)
 	if (!wrp->base)
 		return -EINVAL;
 
+	/* SD card supply levels for the Redmi 9, wrong for any other board */
+	if (!IS_ENABLED(CONFIG_XIAOMI_LANCELOT))
+		return 0;
+
 #define MT6358_LDO_VEMC_CON1 0x1b2a
 #define MT6358_LDO_VMCH_CON1 0x1ce6
 

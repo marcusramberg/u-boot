@@ -37,7 +37,10 @@
 #define CFG_EXTRA_ENV_SETTINGS \
 	"stdout=serial,vidconsole\0" \
 	"stderr=serial,vidconsole\0" \
-	"stdin=serial\0" \
+	"stdin=serial,button-kbd\0" \
+	"bootmenu_0=Key states=button list; pause\0" \
+	"bootmenu_1=Board info=bdinfo; pause\0" \
+	"bootmenu_2=Reset=reset\0" \
 	"bootargs=console=tty0 earlycon root=PARTUUID=1ace1007-02 rootwait rw " \
 		"loglevel=4 clk_ignore_unused pd_ignore_unused audit=0\0"
 
