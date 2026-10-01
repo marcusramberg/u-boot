@@ -1035,7 +1035,9 @@ int board_late_init(void)
 	 * Patch RAM into the original dtb right here, not waiting for booti.
 	 * See the comment on mt6768_fixup_payload_dtb().
 	 */
-	mt6768_fixup_payload_dtb();
+	/* lk's FDT stays untouched on lamuc: chainloaded builds read it again */
+	if (!IS_ENABLED(CONFIG_MOTOROLA_LAMUC))
+		mt6768_fixup_payload_dtb();
 
 	const char *cmdline = get_cmdline();
 	char serial[48];

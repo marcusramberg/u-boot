@@ -1,6 +1,8 @@
 #ifndef __MT6768_H
 #define __MT6768_H
 
+#include <linux/stringify.h>
+
 #define CFG_SYS_SDRAM_BASE 0x40000000
 
 /*
@@ -40,7 +42,9 @@
 	"stdin=serial,button-kbd\0" \
 	"bootmenu_0=Key states=button list; pause\0" \
 	"bootmenu_1=Board info=bdinfo; pause\0" \
-	"bootmenu_2=USB fastboot=fastboot usb 0\0" \
+	"bootmenu_2=USB fastboot (stage + continue chainloads)=run fbchain\0" \
+	"fbchain=setenv filesize; fastboot usb 0; if test -n \"${filesize}\"; " \
+		"then chainload " __stringify(CONFIG_FASTBOOT_BUF_ADDR) "; fi\0" \
 	"bootmenu_3=Reset=reset\0" \
 	"bootargs=console=tty0 earlycon root=PARTUUID=1ace1007-02 rootwait rw " \
 		"loglevel=4 clk_ignore_unused pd_ignore_unused audit=0\0"

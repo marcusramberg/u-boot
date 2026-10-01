@@ -9,6 +9,11 @@
  * a reboot. There is no accessible UART on these handsets.
  */
 
+#include <command.h>
+#include <cpu_func.h>
+#include <init.h>
+#include <vsprintf.h>
+#include <dm/root.h>
 #include <linux/kconfig.h>
 #include <linux/types.h>
 #include <asm/io.h>
@@ -70,3 +75,32 @@ void mt6768_trace(const char *msg)
 {
 	uboot_trace(msg);
 }
+
+/* Start an arm64 Image the way lk does, so a new U-Boot sees lk's FDT in x0. */
+static int do_chainload(struct cmd_tbl *cmdtp, int flag, int argc,
+			char *const argv[])
+{
+	void (*entry)(ulong x0, ulong x1, ulong x2, ulong x3);
+	ulong addr;
+
+	if (argc != 2)
+		return CMD_RET_USAGE;
+
+	addr = hextoul(argv[1], NULL);
+	if ((addr & 0xfff) || readl(addr + 0x38) != 0x644d5241) {
+		printf("no 4K aligned arm64 Image at %lx\n", addr);
+		return CMD_RET_FAILURE;
+	}
+
+	printf("## chainloading %lx, x0=%llx\n", addr,
+	       (u64)get_prev_bl_fdt_addr());
+	dm_remove_devices_active();
+	cleanup_before_linux();
+	entry = (void *)addr;
+	entry(get_prev_bl_fdt_addr(), 0, 0, 0);
+
+	return CMD_RET_FAILURE;
+}
+
+U_BOOT_CMD(chainload, 2, 0, do_chainload,
+	   "start an arm64 Image with lk's FDT in x0", "<addr>");
