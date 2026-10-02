@@ -47,12 +47,17 @@
 	"bootmenu_1=Board info=bdinfo; pause\0" \
 	"bootmenu_2=Show log=memlog 1800; pause\0" \
 	"bootmenu_3=USB fastboot (stage + continue chainloads)=run fbchain\0" \
-	"bootmenu_4=U-Boot prompt=setenv menu_off 1\0" \
-	"bootmenu_5=Reset=reset\0" \
-	"fbchain=setenv stdin serial,button-kbd; setenv stdout serial,vidconsole; " \
-		"setenv stderr serial,vidconsole; setenv filesize; fastboot usb 0; " \
-		"setenv stdin ${con_in}; setenv stdout ${con_out}; " \
-		"setenv stderr ${con_out}; if test -n \"${filesize}\"; " \
+	"bootmenu_4=USB mass storage (microSD)=run umssd\0" \
+	"bootmenu_5=U-Boot prompt=setenv menu_off 1\0" \
+	"bootmenu_6=Reset=reset\0" \
+	"usb_off=setenv stdin serial,button-kbd; setenv stdout serial,vidconsole; " \
+		"setenv stderr serial,vidconsole\0" \
+	"usb_on=setenv stdin ${con_in}; setenv stdout ${con_out}; " \
+		"setenv stderr ${con_out}\0" \
+	"umssd=run usb_off; ums 0 mmc 1; run usb_on\0" \
+	"fbchain=run usb_off; setenv filesize; fastboot usb 0; " \
+		"if test -n \"${after_fb}\"; then run after_fb; setenv after_fb; fi; " \
+		"run usb_on; if test -n \"${filesize}\"; " \
 		"then chainload " __stringify(CONFIG_FASTBOOT_BUF_ADDR) "; fi\0" \
 	"bootargs=console=tty0 earlycon root=PARTUUID=1ace1007-02 rootwait rw " \
 		"loglevel=4 clk_ignore_unused pd_ignore_unused audit=0\0"
