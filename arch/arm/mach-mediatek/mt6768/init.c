@@ -19,6 +19,7 @@
 #include <dm/device-internal.h>
 #include <dm/uclass-internal.h>
 #include <linux/delay.h>
+#include <power/pmic.h>
 
 /* defined in board/mediatek/mt6768/mt6768.c */
 void mt6768_trace(const char *msg);
@@ -994,8 +995,31 @@ void reset_cpu(void)
 	writel(0x1209, 0x10007000 + 0x14);
 }
 
+/* MT6358 LDOs for the microSD slot, as Linux sets them: VMCH, VMC 3.0 V */
+#define MT6358_LDO_VMC_CON0	0x1cc4
+#define MT6358_LDO_VMCH_CON0	0x1cd8
+#define MT6358_VMCH_ANA_CON0	0x1e48
+#define MT6358_VMC_ANA_CON0	0x1e4c
+
+static void mt6768_sd_power_on(void)
+{
+	struct udevice *pwrap;
+
+	if (uclass_get_device_by_driver(UCLASS_PMIC, DM_DRIVER_GET(mtk_pwrap),
+					&pwrap)) {
+		printf("SD: no pwrap, card stays unpowered\n");
+		return;
+	}
+	pmic_clrsetbits(pwrap, MT6358_VMCH_ANA_CON0, 0x700, 3 << 8);
+	pmic_clrsetbits(pwrap, MT6358_VMC_ANA_CON0, 0xf00, 0xb << 8);
+	pmic_clrsetbits(pwrap, MT6358_LDO_VMCH_CON0, 0, BIT(0));
+	pmic_clrsetbits(pwrap, MT6358_LDO_VMC_CON0, 0, BIT(0));
+}
+
 int board_init(void) {
 	mt6768_trace("[UBOOT] board_init reached (past relocation)\n");
+	if (IS_ENABLED(CONFIG_MOTOROLA_LAMUC))
+		mt6768_sd_power_on();
 	return 0;
 }
 
