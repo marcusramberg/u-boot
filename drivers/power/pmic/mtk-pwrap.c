@@ -228,6 +228,9 @@ static int pwrap_probe(struct udevice *dev)
 	if (!wrp->base)
 		return -EINVAL;
 
+	((struct uc_pmic_priv *)dev_get_uclass_priv(dev))->trans_len =
+		wrp->data->io32 ? 4 : 2;
+
 	/* SD card supply levels for the Redmi 9, wrong for any other board */
 	if (!IS_ENABLED(CONFIG_XIAOMI_LANCELOT))
 		return 0;
