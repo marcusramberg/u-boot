@@ -180,10 +180,13 @@ void fastboot_multiresponse(int cmd, char *response)
 			} else {
 				int ret = console_record_readline(buf, sizeof(buf) - 5);
 
-				if (ret < 0)
-					fastboot_fail("Error reading console", response);
-				else
+				/* an overflowed record never drains on its own */
+				if (ret < 0) {
+					console_record_reset();
+					fastboot_fail("Console overflowed, reset", response);
+				} else {
 					fastboot_response("INFO", response, "%s", buf);
+				}
 			}
 			break;
 		}
