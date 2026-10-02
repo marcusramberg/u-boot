@@ -23,6 +23,7 @@
  */
 
 #include <command.h>
+#include <cyclic.h>
 #include <errno.h>
 #include <malloc.h>
 #include <vsprintf.h>
@@ -163,26 +164,40 @@ static int do_memlog(struct cmd_tbl *cmdtp, int flag, int argc,
 {
 	struct memlog_hdr *h = (void *)memlog_base;
 	ulong want = argc > 1 ? hextoul(argv[1], NULL) : 0x1000;
+	ulong skip = argc > 2 ? hextoul(argv[2], NULL) : 0;
 	u32 start = h->start, size = h->size, i;
-	char *buf;
+	char *buf, *line;
 
 	if (h->magic != MEMLOG_MAGIC || start >= memlog_cap || size > memlog_cap)
 		return CMD_RET_FAILURE;
-	if (want > size)
-		want = size;
+	if (skip > size)
+		skip = size;
+	if (want > size - skip)
+		want = size - skip;
 
 	/* snapshot first: printing appends to the same ring */
 	buf = malloc(want + 1);
 	if (!buf)
 		return CMD_RET_FAILURE;
 	for (i = 0; i < want; i++)
-		buf[i] = h->data[(start + memlog_cap - want + i) % memlog_cap];
+		buf[i] = h->data[(start + 2 * memlog_cap - skip - want + i) %
+				 memlog_cap];
 	buf[want] = 0;
-	puts(buf);
+	/* line by line: a slow console must not starve the watchdog */
+	for (line = buf; line; ) {
+		char *nl = strchr(line, '\n');
+
+		if (nl)
+			*nl = 0;
+		puts(line);
+		putc('\n');
+		schedule();
+		line = nl ? nl + 1 : NULL;
+	}
 	free(buf);
 
 	return 0;
 }
 
-U_BOOT_CMD(memlog, 2, 0, do_memlog, "print the end of the RAM console",
-	   "[bytes (hex, default 1000)]");
+U_BOOT_CMD(memlog, 3, 0, do_memlog, "print the end of the RAM console",
+	   "[bytes [skip]] (hex; default 1000 bytes, skip from the newest end)");
