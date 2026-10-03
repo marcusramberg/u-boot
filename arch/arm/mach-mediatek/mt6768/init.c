@@ -1176,9 +1176,10 @@ int board_late_init(void)
      *
      * XXX: maybe change this
      */
-	env_set("kernel_addr_r", "40000000");
-	env_set("fdt_addr_r", "41000000");
-	env_set("ramdisk_addr_r", "42000000");
+	/* an uncompressed arm64 Image with the initramfs built in is ~36 MiB */
+	env_set("kernel_addr_r", "40200000");
+	env_set("fdt_addr_r", "43000000");
+	env_set("ramdisk_addr_r", "44000000");
 	env_set("fastboot_addr_r", "45000000");
 	/* fastboot getvar stuff */
 	env_set("platform", "mt6768");
