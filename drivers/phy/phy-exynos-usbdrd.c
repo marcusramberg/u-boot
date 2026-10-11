@@ -117,6 +117,9 @@
 
 /* Exynos850: USB DRD PHY registers */
 #define EXYNOS850_DRD_LINKCTRL			0x04
+#define LINKCTRL_FORCE_RXELECIDLE		BIT(18)
+#define LINKCTRL_FORCE_PHYSTATUS		BIT(17)
+#define LINKCTRL_FORCE_PIPE_EN			BIT(16)
 #define LINKCTRL_FORCE_QACT			BIT(8)
 #define LINKCTRL_BUS_FILTER_BYPASS		GENMASK(7, 4)
 
@@ -146,12 +149,19 @@
 #define EXYNOS850_DRD_HSP_TEST			0x5c
 #define HSP_TEST_SIDDQ				BIT(24)
 
+/* zuma: exynos2200-style link controller, UTMI is the external eUSB2 PHY */
+#define ZUMA_DRD_CLKRST				0x0c
+#define ZUMA_DRD_UTMI				0x10
+#define ZUMA_UTMI_FORCE_VBUSVALID		BIT(1)
+#define ZUMA_UTMI_FORCE_BVALID			BIT(0)
+
 #define KHZ					1000
 #define MHZ					(KHZ * KHZ)
 
 enum exynos_usbdrd_phy_variant {
 	EXYNOS7870_USBDRD_PHY,
 	EXYNOS850_USBDRD_PHY,
+	ZUMA_USBDRD_PHY,
 };
 
 /**
@@ -162,6 +172,7 @@ enum exynos_usbdrd_phy_variant {
  * @reg_pmu: regmap for PMU block
  * @extrefclk: frequency select settings when using 'separate reference clocks'
  * @variant: ID to uniquely distinguish USB PHY variant
+ * @hs_phy: external high-speed PHY behind the link (zuma)
  */
 struct exynos_usbdrd_phy {
 	void __iomem *reg_phy;
@@ -170,6 +181,7 @@ struct exynos_usbdrd_phy {
 	struct regmap *reg_pmu;
 	u32 extrefclk;
 	enum exynos_usbdrd_phy_variant variant;
+	struct phy hs_phy;
 };
 
 static void exynos_usbdrd_phy_isol(struct exynos_usbdrd_phy *phy_drd,
@@ -471,6 +483,39 @@ static void exynos850_usbdrd_utmi_exit(struct phy *phy)
 	writel(reg, regs_base + EXYNOS850_DRD_CLKRST);
 }
 
+/*
+ * Link controller only: un-gate it, pulse the link reset, force a valid
+ * session, and fake the pipe3 side since only the USB2 path is brought up --
+ * without that the controller's soft reset waits on a PIPE PHY that ABL left
+ * powered off.
+ */
+static int zuma_usbdrd_utmi_init(struct phy *phy)
+{
+	struct exynos_usbdrd_phy *phy_drd = dev_get_priv(phy->dev);
+	void __iomem *regs_base = phy_drd->reg_phy;
+	int ret;
+
+	setbits_le32(regs_base + EXYNOS850_DRD_LINKCTRL,
+		     LINKCTRL_FORCE_QACT | LINKCTRL_BUS_FILTER_BYPASS);
+
+	setbits_le32(regs_base + ZUMA_DRD_CLKRST, CLKRST_LINK_SW_RST);
+	udelay(10);
+	clrbits_le32(regs_base + ZUMA_DRD_CLKRST, CLKRST_LINK_SW_RST);
+
+	setbits_le32(regs_base + ZUMA_DRD_UTMI,
+		     ZUMA_UTMI_FORCE_BVALID | ZUMA_UTMI_FORCE_VBUSVALID);
+
+	clrsetbits_le32(regs_base + EXYNOS850_DRD_LINKCTRL,
+			LINKCTRL_FORCE_PHYSTATUS,
+			LINKCTRL_FORCE_PIPE_EN | LINKCTRL_FORCE_RXELECIDLE);
+
+	ret = generic_phy_init(&phy_drd->hs_phy);
+	if (ret)
+		return ret;
+
+	return generic_phy_power_on(&phy_drd->hs_phy);
+}
+
 static int exynos_usbdrd_phy_init(struct phy *phy)
 {
 	struct exynos_usbdrd_phy *phy_drd = dev_get_priv(phy->dev);
@@ -487,13 +532,16 @@ static int exynos_usbdrd_phy_init(struct phy *phy)
 	case EXYNOS850_USBDRD_PHY:
 		exynos850_usbdrd_utmi_init(phy);
 		break;
+	case ZUMA_USBDRD_PHY:
+		ret = zuma_usbdrd_utmi_init(phy);
+		break;
 	default:
 		dev_err(phy->dev, "Failed to recognize phy variant\n");
 	}
 
 	clk_disable_unprepare(phy_drd->clk);
 
-	return 0;
+	return ret;
 }
 
 static int exynos_usbdrd_phy_exit(struct phy *phy)
@@ -572,6 +620,10 @@ static int exynos_usbdrd_phy_init_clk(struct udevice *dev)
 		return err;
 	}
 
+	/* zuma's UTMI side is the eUSB2 PHY, which owns the reference */
+	if (dev_get_driver_data(dev) == ZUMA_USBDRD_PHY)
+		return 0;
+
 	ref_rate = clk_get_rate(phy_drd->core_clk);
 	err = exynos_rate_to_clk(ref_rate, &phy_drd->extrefclk);
 	if (err) {
@@ -594,6 +646,12 @@ static int exynos_usbdrd_phy_probe(struct udevice *dev)
 	err = exynos_usbdrd_phy_init_clk(dev);
 	if (err)
 		return err;
+
+	phy_drd->variant = dev_get_driver_data(dev);
+
+	/* zuma: PMU isolation is secure-only and ABL leaves the PHY enabled */
+	if (phy_drd->variant == ZUMA_USBDRD_PHY)
+		return generic_phy_get_by_name(dev, "hs", &phy_drd->hs_phy);
 
 	phy_drd->reg_pmu = syscon_regmap_lookup_by_phandle(dev,
 							  "samsung,pmu-syscon");
@@ -623,6 +681,10 @@ static const struct udevice_id exynos_usbdrd_phy_of_match[] = {
 	{
 		.compatible = "samsung,exynos850-usbdrd-phy",
 		.data = EXYNOS850_USBDRD_PHY,
+	},
+	{
+		.compatible = "google,zuma-usb31drd-phy",
+		.data = ZUMA_USBDRD_PHY,
 	},
 	{ }
 };
