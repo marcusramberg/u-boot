@@ -14,17 +14,49 @@
 #include <asm/system.h>
 #include <asm/armv8/mmu.h>
 
-static ulong reg0 __section(".data");
+static ulong reg0 __section(".data") __used;
 
-/**
- * Save x0 register value, assuming previous bootloader set it to
- * point on loaded fdt or (for older linux kernels)atags.
+/*
+ * Save x0, assuming the previous bootloader set it to the loaded fdt (or
+ * atags). Plain asm: reset branches here with the previous stage's SP live,
+ * and a C epilogue pops a frame off it.
+ *
+ * Entered at EL3 (zumapro straight from ABL), drop to EL2 first, the way
+ * uniLoader does. U-Boot's EL3 leg replaces the resident monitor's VBAR_EL3
+ * with stub PSCI and rewrites SCR_EL3, leaving the kernel without PSCI or SGIs.
  */
+#ifdef CONFIG_ARM64
+asm(".pushsection .text.save_boot_params, \"ax\"\n"
+    ".globl save_boot_params\n"
+    "save_boot_params:\n"
+    "	adrp	x1, reg0\n"
+    "	add	x1, x1, :lo12:reg0\n"
+    "	str	x0, [x1]\n"
+    "	mrs	x1, CurrentEL\n"
+    "	cmp	x1, #0xc\n"
+    "	b.eq	1f\n"
+    "	b	save_boot_params_ret\n"
+    "1:	msr	sctlr_el2, xzr\n"
+    "	mrs	x1, scr_el3\n"
+    "	orr	x1, x1, #(1 << 10)\n"	/* RW */
+    "	orr	x1, x1, #(1 << 0)\n"	/* NS */
+    "	msr	scr_el3, x1\n"
+    "	mov	x1, #0x3c9\n"		/* DAIF masked, EL2h */
+    "	msr	spsr_el3, x1\n"
+    "	mov	x1, sp\n"
+    "	msr	sp_el2, x1\n"
+    "	adrp	x1, save_boot_params_ret\n"
+    "	add	x1, x1, :lo12:save_boot_params_ret\n"
+    "	msr	elr_el3, x1\n"
+    "	eret\n"
+    ".popsection\n");
+#else
 void save_boot_params(ulong r0)
 {
 	reg0 = r0;
 	save_boot_params_ret();
 }
+#endif
 
 bool is_addr_accessible(phys_addr_t addr)
 {
