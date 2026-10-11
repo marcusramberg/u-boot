@@ -260,6 +260,13 @@ config MT76X8_USB_PHY
 
 	  This PHY is found on MT76x8 devices supporting USB.
 
+config PHY_ZUMA_EUSB2
+	bool "Google Tensor zuma eUSB2 PHY driver"
+	depends on PHY && CLK
+	help
+	  Enable the Synopsys eUSB2 high-speed PHY on Google Tensor
+	  zuma/zumapro, the UTMI side of the USB31DRD controller.
+
 config PHY_EXYNOS_USBDRD
 	bool "Exynos SoC series USB DRD PHY driver"
 	depends on PHY && CLK
