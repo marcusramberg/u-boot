@@ -22,7 +22,13 @@
 
 	chosen {
 		/* Bootloader expects bootargs specified otherwise it crashes */
-		bootargs = "earlycon=exynos4210,0x10870000 clk_ignore_unused pd_ignore_unused regulator_ignore_unused";
+		/*
+		 * arm64's early idreg-override parses these out of the FDT
+		 * bootargs, before any EFI cmdline is merged. Without them the
+		 * kernel dies silently just after handoff on zumapro -- stock
+		 * passes the same set.
+		 */
+		bootargs = "earlycon=exynos4210,0x10870000 clk_ignore_unused pd_ignore_unused regulator_ignore_unused arm64.nomte id_aa64mmfr1.vh=0 kvm-arm.mode=none nokaslr";
 		stdout-path = &serial_0;
 
 		/* Use display framebuffer as setup by bootloader */
