@@ -189,15 +189,6 @@ static void exynos_parse_dram_banks(const void *fdt_base)
 	}
 }
 
-static bool exynos_is_google_zumapro(void)
-{
-	ofnode root = ofnode_root();
-
-	return ofnode_device_is_compatible(root, "google,zumapro") ||
-	       ofnode_device_is_compatible(root, "google,zumapro-komodo") ||
-	       ofnode_device_is_compatible(root, "google,komodo");
-}
-
 static void exynos_google_zumapro_early_init(void)
 {
 	u32 val;
@@ -408,16 +399,27 @@ int timer_init(void)
 	 */
 	timer_node = ofnode_by_compatible(ofnode_null(), "arm,armv8-timer");
 	gd->arch.timer_rate_hz = ofnode_read_u32_default(timer_node,
-							 "clock-frequency", 0);
+							 "clock-frequency",
+							 CONFIG_COUNTER_FREQUENCY);
+
+	return 0;
+}
+
+int mach_cpu_init(void)
+{
+	/*
+	 * Runs before initf_dm(): the cluster watchdogs ABL leaves armed reset
+	 * the board in 30s, so nothing may probe ahead of this. The compatible
+	 * guard went with it -- ofnode cannot be trusted this early, and these
+	 * registers are constants.
+	 */
+	exynos_google_zumapro_early_init();
 
 	return 0;
 }
 
 int board_early_init_f(void)
 {
-	if (exynos_is_google_zumapro())
-		exynos_google_zumapro_early_init();
-
 	exynos_parse_dram_banks(gd->fdt_blob);
 
 	return 0;
