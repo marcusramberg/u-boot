@@ -554,10 +554,13 @@
 };
 
 &usbdrd31_dwc3 {
+	phys = <&usbdrd31_phy 0>;
+	phy-names = "usb2-phy";
 	dr_mode = "otg";
 	usb-role-switch;
 	role-switch-default-mode = "peripheral";
-	maximum-speed = "super-speed-plus";
+	/* only the eUSB2 side is brought up, the USB-DP combo PHY is not */
+	maximum-speed = "high-speed";
 	status = "okay";
 
 	port {
@@ -565,6 +568,10 @@
 			remote-endpoint = <&usbc0_role_sw>;
 		};
 	};
+};
+
+&usb_hsphy {
+	status = "okay";
 };
 
 &usbdrd31_phy {
