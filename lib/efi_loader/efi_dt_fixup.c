@@ -11,6 +11,7 @@
 #include <efi_loader.h>
 #include <efi_rng.h>
 #include <fdtdec.h>
+#include <lmb.h>
 #include <mapmem.h>
 
 const efi_guid_t efi_guid_dt_fixup_protocol = EFI_DT_FIXUP_PROTOCOL_GUID;
@@ -27,6 +28,14 @@ static void efi_reserve_memory(u64 addr, u64 size, bool nomap)
 {
 	int type;
 	efi_uintn_t ret;
+	phys_addr_t base = addr;
+
+	/*
+	 * efi_allocate_pages() takes addresses from LMB and fails outright if
+	 * they overlap a non-conventional EFI region, so LMB must know too.
+	 */
+	lmb_alloc_mem(LMB_MEM_ALLOC_ADDR, 0, &base, size,
+		      LMB_NOOVERWRITE | LMB_NONOTIFY);
 
 	/* Convert from sandbox address space. */
 	addr = (uintptr_t)map_sysmem(addr, 0);
