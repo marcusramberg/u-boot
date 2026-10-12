@@ -451,6 +451,9 @@ static void acm_disable(struct usb_function *f)
 {
 	struct f_acm *f_acm = func_to_acm(f);
 
+	f_acm->connected = false;
+	f_acm->handshake_bits = 0;
+
 	usb_ep_disable(f_acm->ep_out);
 	usb_ep_disable(f_acm->ep_in);
 	usb_ep_disable(f_acm->ep_notify);
@@ -493,7 +496,9 @@ static void __acm_tx(struct f_acm *f_acm)
 	do {
 		dm_usb_gadget_handle_interrupts(f_acm->udc);
 
-		if (!(f_acm->handshake_bits & ACM_CTRL_DTR))
+		/* A reset or disconnect frees req_in and never completes it. */
+		if (!f_acm->connected ||
+		    !(f_acm->handshake_bits & ACM_CTRL_DTR))
 			break;
 
 		if (!f_acm->tx_on)
