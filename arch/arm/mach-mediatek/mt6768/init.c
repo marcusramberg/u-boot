@@ -589,6 +589,48 @@ static int mt6768_copy_lk_reserved(void *blob, int *added, int *skipped,
 	return 0;
 }
 
+/*
+ * Keep LK's binary modem handoff and eFuse devinfo (the vendor video
+ * libraries check it), not its Android bootargs.
+ */
+static int mt6768_copy_lk_modem(void *blob, const void *lk)
+{
+	static const char * const props[] = {
+		"ccci,modem_info_v2", "atag,mdinfo", "atag,devinfo",
+	};
+	const void *value;
+	unsigned int i;
+	int src, dst, len, err;
+
+	if (!lk || fdt_check_header(lk))
+		return 0;
+	src = fdt_path_offset(lk, "/chosen");
+	if (src == -FDT_ERR_NOTFOUND)
+		return 0;
+	if (src < 0)
+		return src;
+
+	dst = fdt_path_offset(blob, "/chosen");
+	if (dst == -FDT_ERR_NOTFOUND)
+		dst = fdt_add_subnode(blob, 0, "chosen");
+	if (dst < 0)
+		return dst;
+
+	for (i = 0; i < ARRAY_SIZE(props); i++) {
+		value = fdt_getprop(lk, src, props[i], &len);
+		if (!value) {
+			if (len == -FDT_ERR_NOTFOUND)
+				continue;
+			return len;
+		}
+		err = fdt_setprop(blob, dst, props[i], value, len);
+		if (err)
+			return err;
+	}
+
+	return 0;
+}
+
 static int mt6768_fixup_ram(void *blob, const char *marker,
 			    unsigned int limit)
 {
@@ -1203,7 +1245,6 @@ int board_late_init(void)
 
 int ft_board_setup(void *blob, struct bd_info *bd)
 {
-	const void *lk_fdt = get_prevbl_fdt_addr();
 	int err;
 
 	err = mt6768_fixup_ram(blob, "u-boot,ram-fixup-booti", 0);
@@ -1266,7 +1307,5 @@ int ft_board_setup(void *blob, struct bd_info *bd)
 	 * LESSON: enabling a CONFIG can wake up dead code long forgotten.
 	 * Remove dead code instead of leaving it lying around.
 	 */
-	(void)lk_fdt;
-
-	return 0;
+	return mt6768_copy_lk_modem(blob, mt6768_lk_fdt());
 }
