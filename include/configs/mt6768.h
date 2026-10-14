@@ -42,15 +42,16 @@
 	"stdin=serial,button-kbd,usbacm\0" \
 	"stdout=serial,vidconsole,usbacm\0" \
 	"stderr=serial,vidconsole,usbacm\0" \
-	"bootmenu_default=4\0" \
-	"bootmenu_0=Boot NixOS (microSD)=run bootnixos\0" \
-	"bootmenu_1=Key states=button list; pause\0" \
-	"bootmenu_2=Board info=bdinfo; pause\0" \
-	"bootmenu_3=Show log=memlog 1800; pause\0" \
-	"bootmenu_4=USB fastboot (stage + continue chainloads)=run fbchain\0" \
-	"bootmenu_5=USB mass storage (microSD)=run umssd\0" \
-	"bootmenu_6=U-Boot prompt=setenv menu_off 1\0" \
-	"bootmenu_7=Reset=reset\0" \
+	"bootmenu_default=0\0" \
+	"bootmenu_0=Boot NixOS=run bootdefault\0" \
+	"bootmenu_1=NixOS generations=run bootnixos\0" \
+	"bootmenu_2=Key states=button list; pause\0" \
+	"bootmenu_3=Board info=bdinfo; pause\0" \
+	"bootmenu_4=Show log=memlog 1800; pause\0" \
+	"bootmenu_5=USB fastboot (stage + continue chainloads)=run fbchain\0" \
+	"bootmenu_6=USB mass storage (microSD)=run umssd\0" \
+	"bootmenu_7=U-Boot prompt=setenv menu_off 1\0" \
+	"bootmenu_8=Reset=reset\0" \
 	"scriptaddr=0x46000000\0" \
 	"pxefile_addr_r=0x46100000\0" \
 	"bootmeths=extlinux\0" \
